@@ -87,10 +87,30 @@ export interface FailureMaskingConfig {
 	threshold: number;
 }
 
+// In-memory PAR2 repair store tuning
+export interface Par2RepairStoreConfig {
+	max_size_mb?: number;
+	expiry_minutes?: number;
+}
+
+// Seamless mid-stream PAR2 self-heal configuration
+export interface Par2StreamingHealConfig {
+	enabled?: boolean;
+	proactive_on_open?: boolean;
+	block_on_repair_seconds?: number;
+	min_file_size_mb?: number;
+	media_only?: boolean;
+}
+
 // Streaming configuration
 export interface StreamingConfig {
 	max_prefetch: number;
 	failure_masking: FailureMaskingConfig;
+	par2_repair?: boolean;
+	par2_max_concurrent_repairs?: number;
+	par2_max_repair_file_size_mb?: number;
+	par2_repair_store?: Par2RepairStoreConfig;
+	par2_streaming_heal?: Par2StreamingHealConfig;
 }
 
 // Segment cache configuration
@@ -374,6 +394,10 @@ export interface MetadataUpdateRequest {
 export interface StreamingUpdateRequest {
 	max_prefetch?: number;
 	failure_masking?: Partial<FailureMaskingConfig>;
+	par2_repair?: boolean;
+	par2_max_concurrent_repairs?: number;
+	par2_max_repair_file_size_mb?: number;
+	par2_streaming_heal?: Par2StreamingHealConfig;
 }
 
 // Health update request
@@ -553,6 +577,10 @@ export interface MetadataFormData {
 export interface StreamingFormData {
 	max_prefetch: number;
 	failure_masking: FailureMaskingConfig;
+	par2_repair?: boolean;
+	par2_max_concurrent_repairs?: number;
+	par2_max_repair_file_size_mb?: number;
+	par2_streaming_heal?: Par2StreamingHealConfig;
 }
 
 export interface RCloneFormData {

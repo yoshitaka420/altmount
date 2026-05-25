@@ -210,10 +210,65 @@ type StreamingConfig struct {
 	MaxPrefetch    int                  `yaml:"max_prefetch" mapstructure:"max_prefetch" json:"max_prefetch"`
 	FailureMasking FailureMaskingConfig `yaml:"failure_masking" mapstructure:"failure_masking" json:"failure_masking"`
 	// Par2Repair enables PAR2-backed self-healing: on a streaming failure,
-	// missing segments are reconstructed from the file's PAR2 recovery data and
-	// written to the segment cache, avoiding a full ARR re-download. Requires
-	// the segment cache to be enabled. Defaults to off (nil).
+	// missing segments are reconstructed from the file's PAR2 recovery data
+	// instead of forcing a full ARR re-download. Recovered segments are written
+	// to an independent in-memory repair store (see Par2RepairStore) that the
+	// reader consults, so self-heal does NOT require the on-disk segment cache
+	// and works in rclone-VFS-cache deployments. Defaults to off (nil).
 	Par2Repair *bool `yaml:"par2_repair" mapstructure:"par2_repair" json:"par2_repair"`
+	// Par2RepairStore tunes the small in-memory landing zone for reconstructed
+	// segments. Optional; nil uses the documented defaults.
+	Par2RepairStore *Par2RepairStoreConfig `yaml:"par2_repair_store" mapstructure:"par2_repair_store" json:"par2_repair_store"`
+	// Par2MaxConcurrentRepairs caps how many PAR2 reconstructions run at once.
+	// Each holds the whole file in RAM (~2× its size), so this bounds peak repair
+	// memory across concurrent streams. < 1 uses the repair-package default (1).
+	Par2MaxConcurrentRepairs *int `yaml:"par2_max_concurrent_repairs" mapstructure:"par2_max_concurrent_repairs" json:"par2_max_concurrent_repairs"`
+	// Par2MaxRepairFileSizeMB skips self-heal (falling back to ARR) for files
+	// larger than this, bounding worst-case per-repair RAM. 0 or nil == unlimited.
+	Par2MaxRepairFileSizeMB *int `yaml:"par2_max_repair_file_size_mb" mapstructure:"par2_max_repair_file_size_mb" json:"par2_max_repair_file_size_mb"`
+	// Par2StreamingHeal configures seamless mid-stream self-heal on top of
+	// par2_repair: instead of failing a read that hits a missing segment,
+	// AltMount can proactively reconstruct the file at stream start and/or block
+	// the failing read briefly for an in-flight repair, so playback isn't
+	// interrupted. Requires par2_repair enabled (it reuses the same independent
+	// repair store, so the on-disk segment cache is NOT required). Off by
+	// default; nil falls back to documented defaults once enabled.
+	Par2StreamingHeal *Par2StreamingHealConfig `yaml:"par2_streaming_heal" mapstructure:"par2_streaming_heal" json:"par2_streaming_heal"`
+}
+
+// Par2RepairStoreConfig tunes the independent in-memory store that holds
+// reconstructed segments until the client re-reads them. It is intentionally
+// small — recovered segments are short-lived. Pointers so omitted keys use
+// defaults.
+type Par2RepairStoreConfig struct {
+	// MaxSizeMB caps the total reconstructed-segment bytes held in memory.
+	// Default 512.
+	MaxSizeMB *int `yaml:"max_size_mb" mapstructure:"max_size_mb" json:"max_size_mb"`
+	// ExpiryMinutes drops recovered segments older than this. Default 60.
+	ExpiryMinutes *int `yaml:"expiry_minutes" mapstructure:"expiry_minutes" json:"expiry_minutes"`
+}
+
+// Par2StreamingHealConfig controls seamless mid-stream PAR2 self-heal. All
+// fields are pointers so an omitted key falls back to its documented default.
+type Par2StreamingHealConfig struct {
+	// Enabled turns on mid-stream self-heal. When false (default), a missing
+	// segment fails the read as before (mark-corrupted + ARR re-download).
+	Enabled *bool `yaml:"enabled" mapstructure:"enabled" json:"enabled"`
+	// ProactiveOnOpen probes segment availability at stream start and begins
+	// reconstruction before playback reaches a hole. Default false: heal is
+	// reactive (triggered only when a read hits a missing segment) so opening a
+	// stream never pre-downloads the whole file. Opt in for the lowest-latency
+	// recovery on files you expect to be damaged.
+	ProactiveOnOpen *bool `yaml:"proactive_on_open" mapstructure:"proactive_on_open" json:"proactive_on_open"`
+	// BlockOnRepairSeconds caps how long a read that hit a missing segment waits
+	// for self-heal before falling back to the failure path. Keep it below the
+	// client/VFS read timeout. Default 90.
+	BlockOnRepairSeconds *int `yaml:"block_on_repair_seconds" mapstructure:"block_on_repair_seconds" json:"block_on_repair_seconds"`
+	// MinFileSizeMB skips proactive heal for files smaller than this; tiny files
+	// aren't worth a STAT sweep + whole-file fetch. Default 50.
+	MinFileSizeMB *int `yaml:"min_file_size_mb" mapstructure:"min_file_size_mb" json:"min_file_size_mb"`
+	// MediaOnly limits proactive heal to recognised media extensions. Default true.
+	MediaOnly *bool `yaml:"media_only" mapstructure:"media_only" json:"media_only"`
 }
 
 // RCloneConfig represents rclone configuration

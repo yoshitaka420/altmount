@@ -71,6 +71,17 @@ func Parse(data []byte) (*RecoverySet, error) {
 	seen := make(map[[16]byte]struct{})
 	haveMain := false
 
+	// Non-Main packets are buffered and parsed only after the loop, once the
+	// Main packet's SetID is known: a concatenation of .par2 files from different
+	// sets must not mix foreign FileDesc/IFSC/recovery packets into this set.
+	// Main may not be the first packet, so we can't filter inline.
+	type pendingPkt struct {
+		setid [16]byte
+		ptype [16]byte
+		body  []byte
+	}
+	var pending []pendingPkt
+
 	i := 0
 	for i+par2HeaderLen <= len(data) {
 		if !bytes.Equal(data[i:i+8], par2Magic) {
@@ -106,20 +117,43 @@ func Parse(data []byte) (*RecoverySet, error) {
 				return nil, err
 			}
 			haveMain = true
-		case typeFileDesc:
-			rs.parseFileDesc(body)
-		case typeIFSC:
-			rs.parseIFSC(body)
-		case typeRecvSlic:
-			rs.parseRecovery(body)
+		case typeFileDesc, typeIFSC, typeRecvSlic:
+			var setid [16]byte
+			copy(setid[:], pkt[32:48])
+			pending = append(pending, pendingPkt{setid: setid, ptype: ptype, body: body})
 		}
 	}
 
 	if !haveMain {
 		return nil, ErrNoMainPacket
 	}
+
+	// Parse the buffered data packets that belong to this recovery set.
+	for _, p := range pending {
+		if p.setid != rs.SetID {
+			continue // foreign packet from a different set; ignore
+		}
+		switch p.ptype {
+		case typeFileDesc:
+			rs.parseFileDesc(p.body)
+		case typeIFSC:
+			rs.parseIFSC(p.body)
+		case typeRecvSlic:
+			rs.parseRecovery(p.body)
+		}
+	}
 	if rs.SliceSize == 0 || rs.SliceSize%4 != 0 {
 		return nil, ErrNoSliceSize
+	}
+	// Every recovery slice must be exactly SliceSize bytes. A truncated or
+	// malformed recovery packet (that still passed its own MD5) would otherwise
+	// surface much later as a singular-matrix error or, worse, silently skew
+	// reconstruction. Fail fast with a diagnosable error instead.
+	for _, r := range rs.Recovery {
+		if uint64(len(r.Data)) != rs.SliceSize {
+			return nil, fmt.Errorf("par2: recovery slice (exponent %d) length %d != slice size %d",
+				r.Exponent, len(r.Data), rs.SliceSize)
+		}
 	}
 	return rs, nil
 }
