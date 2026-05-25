@@ -390,7 +390,46 @@ func (b *UsenetReader) downloadSegmentWithRetry(ctx context.Context, seg *segmen
 					}
 				}
 
+				// nntppool computes the yEnc CRC32 during decode and returns
+				// ErrCRCMismatch (with a non-nil body) when the article carries a
+				// pcrc32/crc32 trailer that disagrees with the decoded bytes. Treat
+				// it as retryable corruption so the bad bytes are discarded and never
+				// cached, and a fresh round-robin connection is tried.
+				if errors.Is(err, nntppool.ErrCRCMismatch) {
+					b.log.WarnContext(ctx, "segment yEnc CRC mismatch, rejecting",
+						"segment_id", seg.Id,
+						"decoded_bytes", bytesWritten,
+					)
+					return &DataCorruptionError{
+						UnderlyingErr: err,
+						BytesRead:     bytesWritten,
+					}
+				}
+
 				return err
+			}
+
+			// Integrity: yEnc declares the decoded part length in =ybegin/=ypart.
+			// nntppool verifies pcrc32 when the article carries one, but it never
+			// checks the decoded length — so a truncated or desynchronised response
+			// (a common symptom of aggressive pipelining, inflight_requests > 1, or
+			// of an article whose =yend/pcrc32 trailer was lost) can return short
+			// data with a nil error and be streamed as a corrupt segment. Reject any
+			// decode whose length disagrees with the article's own declared
+			// PartSize. This is intrinsic to the fetched article (independent of NZB
+			// metadata, which may carry yEnc-encoded sizes when normalization was
+			// skipped), so it cannot false-positive on a correct decode. The segment
+			// is retried via round-robin and never cached.
+			if result.YEnc.PartSize > 0 && int64(len(result.Bytes)) != result.YEnc.PartSize {
+				b.log.WarnContext(ctx, "segment yEnc length mismatch, rejecting",
+					"segment_id", seg.Id,
+					"decoded_bytes", len(result.Bytes),
+					"declared_part_size", result.YEnc.PartSize,
+				)
+				return &DataCorruptionError{
+					UnderlyingErr: fmt.Errorf("yEnc decoded length %d != declared part size %d", len(result.Bytes), result.YEnc.PartSize),
+					BytesRead:     int64(len(result.Bytes)),
+				}
 			}
 
 			resultBytes = result.Bytes

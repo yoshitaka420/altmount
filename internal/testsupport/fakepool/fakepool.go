@@ -64,6 +64,12 @@ type SegmentBehavior struct {
 	// used for BytesDecoded.
 	Bytes []byte
 
+	// PartSize, when > 0, is reported as ArticleBody.YEnc.PartSize (the yEnc
+	// declared decoded part length). Set it different from len(Bytes) to
+	// simulate a truncated/desynced response that the integrity check must
+	// reject. When 0 the field is left unset (no length assertion is made).
+	PartSize int64
+
 	// Err, if non-nil, is returned instead of a body. Use nntppool sentinel
 	// errors (e.g. nntppool.ErrArticleNotFound) to exercise specific paths
 	// in the retry/dispatch logic.
@@ -337,6 +343,9 @@ func (c *Client) serveBody(ctx context.Context, messageID string, w io.Writer) (
 	body := &nntppool.ArticleBody{
 		MessageID:    messageID,
 		BytesDecoded: len(payload),
+	}
+	if b.PartSize > 0 {
+		body.YEnc.PartSize = b.PartSize
 	}
 	if w == nil {
 		body.Bytes = payload
