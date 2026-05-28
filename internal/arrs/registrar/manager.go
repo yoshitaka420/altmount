@@ -371,6 +371,75 @@ func (m *Manager) EnsureWebhookRegistration(ctx context.Context, altmountURL str
 					slog.InfoContext(ctx, "Added AltMount webhook to Readarr", "instance", instance.Name)
 				}
 			}
+
+		case "sportarr":
+			// Sportarr is not driveable through golift/starr, but it exposes the
+			// Sonarr-style /api/v3/notification endpoint, so AltMount registers its
+			// webhook the same way via the native client. This webhook is what feeds
+			// release.indexer into the import/health pipeline; without it every
+			// Sportarr import is bucketed under the "Unknown" indexer.
+			client, err := m.clients.GetOrCreateSportarrClient(instance.Name, instance.URL, instance.APIKey)
+			if err != nil {
+				slog.ErrorContext(ctx, "Failed to create Sportarr client for webhook check", "instance", instance.Name, "error", err)
+				continue
+			}
+
+			notifications, err := client.GetNotifications(ctx)
+			if err != nil {
+				slog.WarnContext(ctx, "Could not auto-register Sportarr webhook; add a Webhook connection manually (OnGrab + OnImport) pointing at the AltMount callback URL",
+					"instance", instance.Name, "webhook_url", webhookURL, "error", err)
+				continue
+			}
+
+			desired := func(id int64) *clients.SportarrNotification {
+				return &clients.SportarrNotification{
+					ID:             id,
+					Name:           webhookName,
+					Implementation: "Webhook",
+					ConfigContract: "WebhookSettings",
+					OnGrab:         true,
+					OnDownload:     true, // OnImport
+					OnUpgrade:      true,
+					OnRename:       true,
+					Fields: []clients.SportarrNotificationField{
+						{Name: "url", Value: webhookURL},
+						{Name: "method", Value: 1}, // 1 = POST
+					},
+				}
+			}
+
+			var existing *clients.SportarrNotification
+			for i := range notifications {
+				if notifications[i].Name == webhookName {
+					existing = &notifications[i]
+					break
+				}
+			}
+
+			if existing != nil {
+				currentURL := ""
+				for _, f := range existing.Fields {
+					if f.Name == "url" {
+						if val, ok := f.Value.(string); ok {
+							currentURL = val
+						}
+						break
+					}
+				}
+
+				if currentURL != webhookURL || !existing.OnGrab || !existing.OnDownload {
+					slog.InfoContext(ctx, "Updating Sportarr webhook configuration (enabling Grab and Import notifications)", "instance", instance.Name)
+					if err := client.UpdateNotification(ctx, desired(existing.ID)); err != nil {
+						slog.ErrorContext(ctx, "Failed to update Sportarr webhook", "instance", instance.Name, "error", err)
+					}
+				}
+			} else {
+				if err := client.AddNotification(ctx, desired(0)); err != nil {
+					slog.ErrorContext(ctx, "Failed to add Sportarr webhook", "instance", instance.Name, "error", err)
+				} else {
+					slog.InfoContext(ctx, "Added AltMount webhook to Sportarr", "instance", instance.Name)
+				}
+			}
 		}
 	}
 
