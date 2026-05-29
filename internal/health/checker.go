@@ -253,11 +253,6 @@ func (hc *HealthChecker) notifyRcloneVFS(filePath string, event HealthEvent) {
 	}()
 }
 
-// GetHealthStats returns current health statistics
-func (hc *HealthChecker) GetHealthStats(ctx context.Context) (map[database.HealthStatus]int, error) {
-	return hc.healthRepo.GetHealthStats(ctx)
-}
-
 type metadataSegmentLoader struct {
 	segments []*metapb.SegmentData
 }

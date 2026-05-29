@@ -19,8 +19,8 @@ import (
 	"github.com/javi11/altmount/internal/importer"
 	"github.com/javi11/altmount/internal/metadata"
 	metapb "github.com/javi11/altmount/internal/metadata/proto"
-	"github.com/javi11/altmount/internal/utils"
 	"github.com/javi11/altmount/internal/progress"
+	"github.com/javi11/altmount/internal/utils"
 	"github.com/sourcegraph/conc/pool"
 )
 
@@ -202,13 +202,6 @@ func (hw *HealthWorker) IsRunning() bool {
 	return hw.running
 }
 
-// GetStatus returns the current worker status
-func (hw *HealthWorker) GetStatus() WorkerStatus {
-	hw.mu.RLock()
-	defer hw.mu.RUnlock()
-	return hw.status
-}
-
 // GetStats returns current worker statistics
 func (hw *HealthWorker) GetStats() WorkerStats {
 	hw.statsMu.RLock()
@@ -252,13 +245,6 @@ func (hw *HealthWorker) IsCheckActive(filePath string) bool {
 
 	_, exists := hw.activeChecks[filePath]
 	return exists
-}
-
-// IsCycleRunning returns whether a health check cycle is currently running
-func (hw *HealthWorker) IsCycleRunning() bool {
-	hw.mu.RLock()
-	defer hw.mu.RUnlock()
-	return hw.cycleRunning
 }
 
 // run is the main worker loop
