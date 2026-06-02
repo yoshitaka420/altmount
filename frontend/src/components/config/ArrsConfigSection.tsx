@@ -1,7 +1,14 @@
 import { AlertTriangle, Plus, Save, Trash2, Webhook } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useRegisterArrsWebhooks } from "../../hooks/useApi";
-import type { ArrsConfig, ArrsInstanceConfig, ArrsType, ConfigResponse } from "../../types/config";
+import type {
+	ArrsConfig,
+	ArrsInstanceConfig,
+	ArrsType,
+	ConfigResponse,
+	StuckCleanupAction,
+	StuckCleanupRule,
+} from "../../types/config";
 import { LoadingSpinner } from "../ui/LoadingSpinner";
 import { ArrsInstanceCard } from "./ArrsInstanceCard";
 
@@ -55,6 +62,7 @@ export function ArrsConfigSection({
 	const [webhookError, setWebhookError] = useState<string | null>(null);
 	const [saveError, setSaveError] = useState<string | null>(null);
 	const [newIgnoreMessage, setNewIgnoreMessage] = useState("");
+	const [newStuckPattern, setNewStuckPattern] = useState("");
 
 	const registerWebhooks = useRegisterArrsWebhooks();
 	const defaultWebhookUrl = `http://${config.webdav.host || "altmount"}:${config.webdav.port}`;
@@ -207,6 +215,39 @@ export function ArrsConfigSection({
 		const newList = [...currentList];
 		newList[index] = { ...newList[index], enabled: !newList[index].enabled };
 		handleFormChange("queue_cleanup_allowlist", newList);
+	};
+
+	const handleAddStuckPattern = () => {
+		if (!newStuckPattern.trim()) return;
+		const currentList = formData.stuck_cleanup_rules || [];
+		if (currentList.some((m) => m.message === newStuckPattern.trim())) {
+			setNewStuckPattern("");
+			return;
+		}
+		const newList: StuckCleanupRule[] = [
+			...currentList,
+			{ message: newStuckPattern.trim(), enabled: true, action: "blocklist_search" },
+		];
+		handleFormChange("stuck_cleanup_rules", newList);
+		setNewStuckPattern("");
+	};
+
+	const handleRemoveStuckPattern = (index: number) => {
+		const newList = [...(formData.stuck_cleanup_rules || [])];
+		newList.splice(index, 1);
+		handleFormChange("stuck_cleanup_rules", newList);
+	};
+
+	const handleToggleStuckPattern = (index: number) => {
+		const newList = [...(formData.stuck_cleanup_rules || [])];
+		newList[index] = { ...newList[index], enabled: !newList[index].enabled };
+		handleFormChange("stuck_cleanup_rules", newList);
+	};
+
+	const handleSetStuckRuleAction = (index: number, action: StuckCleanupAction) => {
+		const newList = [...(formData.stuck_cleanup_rules || [])];
+		newList[index] = { ...newList[index], action };
+		handleFormChange("stuck_cleanup_rules", newList);
 	};
 
 	const handleSave = async () => {
@@ -493,6 +534,143 @@ export function ArrsConfigSection({
 												className="btn btn-primary join-item px-4"
 												onClick={handleAddIgnoreMessage}
 												disabled={!newIgnoreMessage.trim()}
+											>
+												<Plus className="h-4 w-4" />
+											</button>
+										</div>
+									)}
+								</div>
+							</div>
+						)}
+
+						<div className="h-px bg-base-300/50" />
+
+						{/* Stuck Import Cleanup — own section */}
+						<div className="flex items-center gap-2">
+							<h4 className="font-bold text-base-content/40 text-xs uppercase tracking-widest">
+								Stuck Import Cleanup
+							</h4>
+							<div className="h-px flex-1 bg-base-300/50" />
+						</div>
+
+						<div className="flex items-start justify-between gap-4">
+							<div className="min-w-0 flex-1">
+								<h5 className="break-words font-bold text-base-content text-sm">
+									Clean Up Stuck Imports
+								</h5>
+								<p className="mt-1 break-words text-[11px] text-base-content/50 leading-relaxed">
+									When an import AltMount sent gets stuck for a known reason, act on it after the
+									grace period below. Each rule decides whether to just remove it, blocklist it, or
+									blocklist it and search for a replacement. Runs automatically on the cleanup
+									interval; you can also trigger it any time from the Queue page.
+								</p>
+							</div>
+							<input
+								type="checkbox"
+								className="checkbox checkbox-primary checkbox-sm mt-1 shrink-0"
+								checked={formData.stuck_cleanup_enabled ?? false}
+								onChange={(e) => handleFormChange("stuck_cleanup_enabled", e.target.checked)}
+								disabled={isReadOnly}
+							/>
+						</div>
+
+						{(formData.stuck_cleanup_enabled ?? false) && (
+							<div className="fade-in zoom-in-95 animate-in space-y-6">
+								<fieldset className="fieldset max-w-xs">
+									<legend className="fieldset-legend whitespace-normal font-semibold md:whitespace-nowrap">
+										Stuck Grace Period
+									</legend>
+									<div className="join w-full">
+										<input
+											type="number"
+											className="input input-bordered join-item w-full bg-base-100 font-mono text-sm"
+											value={formData.stuck_cleanup_grace_period_minutes ?? 5}
+											onChange={(e) =>
+												handleFormChange(
+													"stuck_cleanup_grace_period_minutes",
+													Number.parseInt(e.target.value, 10) || 5,
+												)
+											}
+											min={1}
+											disabled={isReadOnly}
+										/>
+										<span className="btn btn-ghost join-item pointer-events-none border-base-300 text-xs">
+											min
+										</span>
+									</div>
+									<div className="mt-2 whitespace-normal text-base-content/70 text-xs">
+										How long an import must stay continuously stuck before a rule acts on it (e.g.
+										1–5 minutes). Transient errors that the *arr resolves on its own are left alone.
+									</div>
+								</fieldset>
+
+								<div className="space-y-4">
+									<h5 className="font-bold text-base-content/60 text-xs uppercase">
+										Stuck Error Rules
+									</h5>
+									<p className="whitespace-normal text-base-content/70 text-xs">
+										Each rule matches an *arr import error message and chooses the action: remove
+										from queue only, blocklist (no new search), or blocklist and search for a
+										replacement.
+									</p>
+									<div className="custom-scrollbar max-h-72 space-y-2 overflow-y-auto pr-2">
+										{(formData.stuck_cleanup_rules || []).map((rule, index) => (
+											<div
+												key={index}
+												className="flex items-center gap-2 rounded-xl border border-base-300/50 bg-base-100/50 p-2 pl-3"
+											>
+												<input
+													type="checkbox"
+													className="checkbox checkbox-sm checkbox-primary shrink-0"
+													checked={rule.enabled}
+													onChange={() => handleToggleStuckPattern(index)}
+													disabled={isReadOnly}
+												/>
+												<span
+													className={`min-w-0 flex-1 truncate font-mono text-xs ${!rule.enabled ? "text-base-content/50 line-through" : ""}`}
+													title={rule.message}
+												>
+													{rule.message}
+												</span>
+												<select
+													className="select select-bordered select-xs w-44 shrink-0 bg-base-100 text-xs"
+													value={rule.action}
+													onChange={(e) =>
+														handleSetStuckRuleAction(index, e.target.value as StuckCleanupAction)
+													}
+													disabled={isReadOnly || !rule.enabled}
+												>
+													<option value="remove">Remove only</option>
+													<option value="blocklist">Blocklist</option>
+													<option value="blocklist_search">Blocklist + search</option>
+												</select>
+												<button
+													type="button"
+													className="btn btn-ghost btn-sm shrink-0 text-error hover:bg-error/10"
+													onClick={() => handleRemoveStuckPattern(index)}
+													disabled={isReadOnly}
+												>
+													<Trash2 className="h-3 w-3" />
+												</button>
+											</div>
+										))}
+									</div>
+
+									{!isReadOnly && (
+										<div className="join w-full shadow-sm">
+											<input
+												type="text"
+												className="input input-bordered join-item flex-1 bg-base-100 text-xs"
+												placeholder="Add stuck error message... (defaults to blocklist + search)"
+												value={newStuckPattern}
+												onChange={(e) => setNewStuckPattern(e.target.value)}
+												onKeyDown={(e) => e.key === "Enter" && handleAddStuckPattern()}
+											/>
+											<button
+												type="button"
+												className="btn btn-primary join-item px-4"
+												onClick={handleAddStuckPattern}
+												disabled={!newStuckPattern.trim()}
 											>
 												<Plus className="h-4 w-4" />
 											</button>

@@ -79,6 +79,18 @@ export interface QueueStats {
 	last_updated: string;
 }
 
+export interface ArrsQueueCleanupInstanceResult {
+	instance: string;
+	type: string;
+	blocked: number;
+	error?: string;
+}
+
+export interface ArrsQueueCleanupResult {
+	instances: ArrsQueueCleanupInstanceResult[];
+	total_blocked: number;
+}
+
 export interface QueueHistoryRange {
 	completed: number;
 	failed: number;

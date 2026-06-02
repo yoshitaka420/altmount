@@ -365,6 +365,7 @@ func (s *Server) SetupRoutes(app *fiber.App) {
 	api.Post("/arrs/instances/test", s.handleTestArrsConnection)
 	api.Get("/arrs/stats", s.handleGetArrsStats)
 	api.Get("/arrs/health", s.handleGetArrsHealth)
+	api.Post("/arrs/queue/cleanup", s.handleCleanupArrsQueue)
 	api.Post("/arrs/webhook/register", s.handleRegisterArrsWebhooks)
 	api.Post("/arrs/download-client/register", s.handleRegisterArrsDownloadClients)
 	api.Post("/arrs/download-client/test", s.handleTestArrsDownloadClients)

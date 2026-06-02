@@ -659,6 +659,19 @@ export const useRegisterArrsWebhooks = () => {
 	});
 };
 
+// ARR stuck-import queue cleanup hook (blocklist + re-search)
+export const useCleanupArrsQueue = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: (force?: boolean) => apiClient.cleanupArrsQueue(force),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ["queue"] });
+			queryClient.invalidateQueries({ queryKey: ["queue", "stats"] });
+		},
+	});
+};
+
 // ARR Download Client Registration hook
 export const useRegisterArrsDownloadClients = () => {
 	return useMutation({

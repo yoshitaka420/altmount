@@ -991,6 +991,35 @@ func (s *Server) handleGetArrsHealth(c *fiber.Ctx) error {
 	})
 }
 
+// handleCleanupArrsQueue triggers a stuck-import cleanup across all ARR instances
+//
+//	@Summary		Clean up stuck ARR imports
+//	@Description	Removes and blocklists imports AltMount sent that are stuck for a known reason, so the *arr searches for a replacement. By default (force=true) matching items are blocklisted immediately, bypassing the configured grace period.
+//	@Tags			ARRs
+//	@Produce		json
+//	@Param			force	query		bool	false	"Bypass the grace period and blocklist matching items immediately (default true)"
+//	@Success		200	{object}	APIResponse
+//	@Failure		500	{object}	APIResponse
+//	@Security		BearerAuth
+//	@Router			/arrs/queue/cleanup [post]
+func (s *Server) handleCleanupArrsQueue(c *fiber.Ctx) error {
+	if s.arrsService == nil {
+		return RespondServiceUnavailable(c, "Arrs not available", "")
+	}
+
+	// Manual triggers default to respecting the grace period: only items that have
+	// been continuously stuck for the configured interval are blocklisted. Pass
+	// force=true to skip the wait and blocklist everything currently matching.
+	force := c.Query("force", "false") == "true"
+
+	result, err := s.arrsService.CleanupStuckQueue(c.Context(), force)
+	if err != nil {
+		return RespondInternalError(c, "Failed to clean up ARR queues", err.Error())
+	}
+
+	return RespondSuccess(c, result)
+}
+
 // handleRegisterArrsWebhooks triggers automatic registration of webhooks in ARR instances
 //
 //	@Summary		Register ARR webhooks

@@ -206,8 +206,8 @@ func (s *Service) StopWorker(ctx context.Context) {
 // the queue cleanup worker when arrs.enabled or arrs.queue_cleanup_enabled flips.
 func (s *Service) RegisterConfigChangeHandler(ctx context.Context, configManager *config.Manager) {
 	configManager.OnConfigChange(func(oldConfig, newConfig *config.Config) {
-		oldOn := worker.IsQueueCleanupEnabled(oldConfig)
-		newOn := worker.IsQueueCleanupEnabled(newConfig)
+		oldOn := worker.IsQueueCleanupEnabled(oldConfig) || worker.IsStuckCleanupEnabled(oldConfig)
+		newOn := worker.IsQueueCleanupEnabled(newConfig) || worker.IsStuckCleanupEnabled(newConfig)
 		if oldOn == newOn {
 			return
 		}
@@ -226,6 +226,13 @@ func (s *Service) RegisterConfigChangeHandler(ctx context.Context, configManager
 // CleanupQueue checks all ARR instances for importPending items with empty folders
 func (s *Service) CleanupQueue(ctx context.Context) error {
 	return s.worker.CleanupQueue(ctx)
+}
+
+// CleanupStuckQueue removes and blocklists stuck imports across all enabled ARR
+// instances so the *arr searches for a replacement release. When force is true the
+// configured grace period is bypassed (used by the manual trigger).
+func (s *Service) CleanupStuckQueue(ctx context.Context, force bool) (*worker.StuckCleanupResult, error) {
+	return s.worker.CleanupStuckQueue(ctx, force)
 }
 
 // TriggerFileRescan triggers a rescan for a specific file path through the appropriate ARR instance

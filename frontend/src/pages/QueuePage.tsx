@@ -5,6 +5,7 @@ import {
 	ArrowDown,
 	ArrowUp,
 	ArrowUpDown,
+	Ban,
 	Box,
 	CheckCircle2,
 	ChevronDown,
@@ -41,6 +42,7 @@ import {
 	useBulkCancelQueueItems,
 	useBulkUpdateQueueItemPriority,
 	useCancelQueueItem,
+	useCleanupArrsQueue,
 	useClearCompletedQueue,
 	useClearFailedQueue,
 	useClearPendingQueue,
@@ -131,6 +133,7 @@ export function QueuePage() {
 	const clearPending = useClearPendingQueue();
 	const addTestQueueItem = useAddTestQueueItem();
 	const regenerateSymlinks = useRegenerateSymlinks();
+	const cleanupArrsQueue = useCleanupArrsQueue();
 	const { confirmDelete, confirmAction } = useConfirm();
 	const { showToast } = useToast();
 
@@ -283,6 +286,52 @@ export function QueuePage() {
 			},
 		);
 		if (confirmed) await clearPending.mutateAsync("");
+	};
+
+	const handleBlocklistStuck = async () => {
+		const confirmed = await confirmAction(
+			"Clean Up Stuck Imports",
+			"Runs the stuck-import check now. Imports AltMount sent that the *arr has been erroring on for longer than the configured grace period are acted on per your rules (remove from queue, blocklist, or blocklist and search for a replacement). Items that only briefly errored are left alone. Continue?",
+			{
+				type: "warning",
+				confirmText: "Run Cleanup Now",
+				confirmButtonClass: "btn-warning",
+			},
+		);
+		if (!confirmed) return;
+		try {
+			const result = await cleanupArrsQueue.mutateAsync(false);
+			const failed = result.instances.filter((i) => i.error);
+			if (result.total_blocked === 0) {
+				showToast({
+					type: "info",
+					title: "Nothing to clean up",
+					message:
+						"No imports have been stuck past the grace period yet. They'll be handled automatically once they have.",
+				});
+			} else {
+				showToast({
+					type: "success",
+					title: "Stuck imports cleaned up",
+					message: `Acted on ${result.total_blocked} stuck import${
+						result.total_blocked === 1 ? "" : "s"
+					}.`,
+				});
+			}
+			if (failed.length > 0) {
+				showToast({
+					type: "error",
+					title: "Some instances failed",
+					message: failed.map((i) => `${i.instance}: ${i.error}`).join("; "),
+				});
+			}
+		} catch (error) {
+			showToast({
+				type: "error",
+				title: "Cleanup failed",
+				message: error instanceof Error ? error.message : "Failed to clean up ARR queues",
+			});
+		}
 	};
 
 	const handleAddTestFile = async (size: "100MB" | "1GB" | "10GB") => {
@@ -482,6 +531,20 @@ export function QueuePage() {
 											disabled={clearFailed.isPending}
 										>
 											<Trash2 className="h-4 w-4" /> Clear Failed
+										</button>
+									</li>
+									<div className="divider my-1 text-base-content/70" />
+									<li className="menu-title px-4 py-2 font-bold text-base-content/40 text-xs uppercase tracking-widest">
+										ARR Cleanup
+									</li>
+									<li>
+										<button
+											type="button"
+											onClick={handleBlocklistStuck}
+											className="text-warning"
+											disabled={cleanupArrsQueue.isPending}
+										>
+											<Ban className="h-4 w-4" /> Blocklist Stuck Imports
 										</button>
 									</li>
 									<div className="divider my-1 text-base-content/70" />

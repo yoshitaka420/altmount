@@ -1,6 +1,7 @@
 import type {
 	ActiveStream,
 	APIResponse,
+	ArrsQueueCleanupResult,
 	AuthResponse,
 	ChangeOwnPasswordRequest,
 	FileHealth,
@@ -688,6 +689,12 @@ export class APIClient {
 
 	async getArrsHealth() {
 		return this.request<Record<string, unknown>>("/arrs/health");
+	}
+
+	async cleanupArrsQueue(force?: boolean) {
+		return this.request<ArrsQueueCleanupResult>(`/arrs/queue/cleanup?force=${force === true}`, {
+			method: "POST",
+		});
 	}
 
 	async registerArrsWebhooks() {
