@@ -120,6 +120,51 @@ jobs:
       release-tag: dev
       prerelease: true
 
+  publish-dev-aliases:
+    name: Publish Stable-Named Dev Downloads
+    needs: publish-dev-binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # The per-build archives carry the commit sha in their name
+      # (altmount-cli_vdev-<sha>_<os>_<arch>.<ext>), so their download URLs change on
+      # every push. Mirror them under version-less names so each platform has ONE
+      # permanent URL that always serves the latest dev build, e.g.:
+      #   https://github.com/<owner>/<repo>/releases/download/dev/altmount-cli_windows_amd64.zip
+      - name: Mirror dev assets under stable, version-less names
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          workdir="$(mktemp -d)"
+          cd "$workdir"
+
+          # Grab the freshly-published, sha-named CLI archives from the dev release.
+          gh release download dev --repo "$REPO" --pattern 'altmount-cli_vdev-*' --dir .
+
+          shopt -s nullglob
+          stable_files=()
+          for f in altmount-cli_vdev-*; do
+            # altmount-cli_vdev-<sha>_<os>_<arch>.<ext> -> altmount-cli_<os>_<arch>.<ext>
+            stable="$(printf '%s' "$f" | sed -E 's/^altmount-cli_vdev-[0-9a-f]+_/altmount-cli_/')"
+            cp "$f" "$stable"
+            stable_files+=("$stable")
+          done
+
+          if [ ${#stable_files[@]} -eq 0 ]; then
+            echo "No dev CLI archives found to alias" >&2
+            exit 1
+          fi
+
+          # Checksums for the stable-named files so users can verify a pulled build.
+          sha256sum "${stable_files[@]}" > checksums-latest.txt
+
+          # --clobber keeps the URLs constant across runs (prepare-dev-release wipes the
+          # previous run's assets first, so these are re-created fresh each push).
+          gh release upload dev "${stable_files[@]}" checksums-latest.txt --repo "$REPO" --clobber
+
   build-dev-amd64:
     name: Build Dev Image (AMD64)
     runs-on: ubuntu-latest
