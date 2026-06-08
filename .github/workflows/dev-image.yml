@@ -121,18 +121,21 @@ jobs:
       prerelease: true
 
   publish-dev-aliases:
-    name: Publish Stable-Named Dev Downloads
+    name: Publish Clean Dev Downloads
     needs: publish-dev-binaries
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      # The per-build archives carry the commit sha in their name
-      # (altmount-cli_vdev-<sha>_<os>_<arch>.<ext>), so their download URLs change on
-      # every push. Mirror them under version-less names so each platform has ONE
-      # permanent URL that always serves the latest dev build, e.g.:
+      # build-cli.yml names every archive altmount-cli_vdev-<full-sha>_<os>_<arch>.<ext>.
+      # On the rolling dev release that sha string is just noise: the release is wiped and
+      # rebuilt on every push, so the sha-named copies only ever describe the current
+      # commit and have no rollback value. Re-publish each archive under a clean,
+      # version-less name (one permanent URL per platform) and then drop the long
+      # sha-named originals so the release shows only the tidy set. Provenance still lives
+      # in the release notes (commit link) and the binary's --version output.
       #   https://github.com/<owner>/<repo>/releases/download/dev/altmount-cli_windows_amd64.zip
-      - name: Mirror dev assets under stable, version-less names
+      - name: Re-publish dev archives under clean names and prune the sha-named ones
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -145,25 +148,32 @@ jobs:
           gh release download dev --repo "$REPO" --pattern 'altmount-cli_vdev-*' --dir .
 
           shopt -s nullglob
+          sha_named=(altmount-cli_vdev-*)
+          if [ ${#sha_named[@]} -eq 0 ]; then
+            echo "No dev CLI archives found to clean up" >&2
+            exit 1
+          fi
+
           stable_files=()
-          for f in altmount-cli_vdev-*; do
+          for f in "${sha_named[@]}"; do
             # altmount-cli_vdev-<sha>_<os>_<arch>.<ext> -> altmount-cli_<os>_<arch>.<ext>
             stable="$(printf '%s' "$f" | sed -E 's/^altmount-cli_vdev-[0-9a-f]+_/altmount-cli_/')"
             cp "$f" "$stable"
             stable_files+=("$stable")
           done
 
-          if [ ${#stable_files[@]} -eq 0 ]; then
-            echo "No dev CLI archives found to alias" >&2
-            exit 1
-          fi
-
-          # Checksums for the stable-named files so users can verify a pulled build.
-          sha256sum "${stable_files[@]}" > checksums-latest.txt
+          # Checksums for the clean files so users can verify a pulled build.
+          sha256sum "${stable_files[@]}" > checksums.txt
 
           # --clobber keeps the URLs constant across runs (prepare-dev-release wipes the
           # previous run's assets first, so these are re-created fresh each push).
-          gh release upload dev "${stable_files[@]}" checksums-latest.txt --repo "$REPO" --clobber
+          gh release upload dev "${stable_files[@]}" checksums.txt --repo "$REPO" --clobber
+
+          # Remove the long sha-named archives and their checksums so only the clean set remains.
+          for f in "${sha_named[@]}"; do
+            gh release delete-asset dev "$f" --repo "$REPO" --yes || true
+          done
+          gh release delete-asset dev checksums-cli.txt --repo "$REPO" --yes || true
 
   build-dev-amd64:
     name: Build Dev Image (AMD64)
