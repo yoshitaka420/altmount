@@ -390,7 +390,13 @@ func (s *Server) handleCancelQueue(c *fiber.Ctx) error {
 //	@Security		BearerAuth
 //	@Router			/queue/stats [get]
 func (s *Server) handleGetQueueStats(c *fiber.Ctx) error {
-	stats, err := s.queueRepo.GetQueueStats(c.Context())
+	// Exclude hidden Stremio items so counters match the filtered queue listing
+	var hideStremioBefore *time.Time
+	if s.configManager != nil {
+		hideStremioBefore = stremioHideCutoff(s.configManager.GetConfig())
+	}
+
+	stats, err := s.queueRepo.GetQueueStats(c.Context(), hideStremioBefore)
 	if err != nil {
 		return RespondInternalError(c, "Failed to retrieve queue statistics", err.Error())
 	}

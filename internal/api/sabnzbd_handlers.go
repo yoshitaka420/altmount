@@ -577,6 +577,15 @@ func (s *Server) handleSABnzbdAddUrl(c *fiber.Ctx) error {
 		}
 	}
 
+	// Optionally tag addurl imports as Stremio-originated so they get the same
+	// hide and TTL-cleanup behavior as Stremio addon imports. Streaming clients
+	// (e.g. AIOStreams) add NZBs via addurl, while Sonarr/Radarr use addfile.
+	// The prefixed ID is returned as the nzo_id, so client-side tracking by id
+	// stays consistent.
+	if s.configManager.GetConfig().Stremio.ShouldTreatAddURLAsStremio() {
+		downloadID = stremioDownloadIDPrefix + downloadID
+	}
+
 	_, err = s.importerService.AddToQueue(c.Context(), tempFile, &completeDir, &validatedCategory, &priority, metadataJSON, &downloadID)
 	if err != nil {
 		return s.writeSABnzbdErrorFiber(c, "Failed to add to queue")

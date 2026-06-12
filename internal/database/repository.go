@@ -625,10 +625,13 @@ func (r *Repository) RestartQueueItemsBulk(ctx context.Context, ids []int64) err
 	return nil
 }
 
-// GetQueueStats retrieves current queue statistics
-func (r *Repository) GetQueueStats(ctx context.Context) (*QueueStats, error) {
+// GetQueueStats retrieves current queue statistics.
+// When hideStremioCompletedBefore is non-nil, completed Stremio-originated items
+// (download_id prefixed "stremio:") completed before the cutoff are excluded
+// from the completed count.
+func (r *Repository) GetQueueStats(ctx context.Context, hideStremioCompletedBefore *time.Time) (*QueueStats, error) {
 	// Update stats from actual queue data
-	err := r.UpdateQueueStats(ctx)
+	err := r.UpdateQueueStats(ctx, hideStremioCompletedBefore)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update queue stats: %w", err)
 	}
@@ -663,19 +666,31 @@ func (r *Repository) GetQueueStats(ctx context.Context) (*QueueStats, error) {
 	return &stats, nil
 }
 
-// UpdateQueueStats updates queue statistics based on current queue state
-func (r *Repository) UpdateQueueStats(ctx context.Context) error {
+// UpdateQueueStats updates queue statistics based on current queue state.
+// When hideStremioCompletedBefore is non-nil, hidden Stremio items are excluded
+// from the completed count so the stats match the filtered queue listing.
+func (r *Repository) UpdateQueueStats(ctx context.Context, hideStremioCompletedBefore *time.Time) error {
 	// Get current counts
-	countQueries := []string{
-		`SELECT COUNT(*) FROM import_queue WHERE status = 'pending'`,
-		`SELECT COUNT(*) FROM import_queue WHERE status = 'processing'`,
-		`SELECT COUNT(*) FROM import_queue WHERE status = 'completed'`,
-		`SELECT COUNT(*) FROM import_queue WHERE status = 'failed'`,
+	completedQuery := `SELECT COUNT(*) FROM import_queue WHERE status = 'completed'`
+	var completedArgs []any
+	if hideStremioCompletedBefore != nil {
+		completedQuery += " AND " + hiddenStremioCondition
+		completedArgs = append(completedArgs, *hideStremioCompletedBefore)
+	}
+
+	countQueries := []struct {
+		query string
+		args  []any
+	}{
+		{`SELECT COUNT(*) FROM import_queue WHERE status = 'pending'`, nil},
+		{`SELECT COUNT(*) FROM import_queue WHERE status = 'processing'`, nil},
+		{completedQuery, completedArgs},
+		{`SELECT COUNT(*) FROM import_queue WHERE status = 'failed'`, nil},
 	}
 
 	var counts [4]int
-	for i, query := range countQueries {
-		err := r.db.QueryRowContext(ctx, query).Scan(&counts[i])
+	for i, cq := range countQueries {
+		err := r.db.QueryRowContext(ctx, cq.query, cq.args...).Scan(&counts[i])
 		if err != nil {
 			return fmt.Errorf("failed to get count for query %d: %w", i, err)
 		}

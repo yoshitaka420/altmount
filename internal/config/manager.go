@@ -179,6 +179,12 @@ type StremioConfig struct {
 	// HideCompletedAfterSeconds is the grace period after completion before a
 	// Stremio item is hidden (0 = hide immediately). Defaults to 60 seconds.
 	HideCompletedAfterSeconds int `yaml:"hide_completed_after_seconds" mapstructure:"hide_completed_after_seconds" json:"hide_completed_after_seconds"`
+	// TreatAddURLAsStremio tags NZBs added via the SABnzbd addurl API with the
+	// stremio: download ID prefix, so they get the same hide and TTL-cleanup
+	// behavior as Stremio addon imports. Streaming clients like AIOStreams add
+	// NZBs via addurl, while Sonarr/Radarr upload NZB files via addfile, which
+	// is never tagged. Disabled by default.
+	TreatAddURLAsStremio *bool `yaml:"treat_addurl_as_stremio" mapstructure:"treat_addurl_as_stremio" json:"treat_addurl_as_stremio"`
 	// Prowlarr configures the Prowlarr indexer used by the Stremio addon to search for NZBs.
 	Prowlarr ProwlarrConfig `yaml:"prowlarr" mapstructure:"prowlarr" json:"prowlarr"`
 }
@@ -187,6 +193,12 @@ type StremioConfig struct {
 // items should be hidden from queue and history listings.
 func (s StremioConfig) ShouldHideCompletedFromQueue() bool {
 	return s.HideCompletedFromQueue != nil && *s.HideCompletedFromQueue
+}
+
+// ShouldTreatAddURLAsStremio returns whether SABnzbd addurl imports should be
+// tagged as Stremio-originated.
+func (s StremioConfig) ShouldTreatAddURLAsStremio() bool {
+	return s.TreatAddURLAsStremio != nil && *s.TreatAddURLAsStremio
 }
 
 // AuthConfig represents authentication configuration
@@ -1467,6 +1479,7 @@ func DefaultConfig(configDir ...string) *Config {
 	loginRequired := true           // Require login by default
 	stremioEnabled := false         // Stremio endpoint disabled by default
 	stremioHideCompleted := false   // Keep completed Stremio items visible by default
+	stremioTagAddURL := false       // Do not tag SABnzbd addurl imports as Stremio by default
 	prowlarrEnabled := false        // Prowlarr integration disabled by default
 	watchIntervalSeconds := 10      // Default watch interval
 	failedItemRetentionHours := 24  // Default: auto-remove failed items after 24 hours
@@ -1518,6 +1531,7 @@ func DefaultConfig(configDir ...string) *Config {
 			NzbTTLHours:               24,
 			HideCompletedFromQueue:    &stremioHideCompleted,
 			HideCompletedAfterSeconds: 60,
+			TreatAddURLAsStremio:      &stremioTagAddURL,
 			Prowlarr: ProwlarrConfig{
 				Enabled:    &prowlarrEnabled,
 				Host:       "http://localhost:9696",

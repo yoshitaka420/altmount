@@ -438,7 +438,7 @@ func (s *Server) checkSystemHealth(ctx context.Context) SystemHealthResponse {
 	overallStatus := "healthy"
 
 	// Check database connectivity
-	if _, err := s.queueRepo.GetQueueStats(ctx); err != nil {
+	if _, err := s.queueRepo.GetQueueStats(ctx, nil); err != nil {
 		components["database"] = ComponentHealth{
 			Status:  "unhealthy",
 			Message: "Database connection failed",

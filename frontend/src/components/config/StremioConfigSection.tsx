@@ -107,6 +107,7 @@ export function StremioConfigSection({
 		base_url: config.stremio?.base_url ?? "",
 		hide_completed_from_queue: config.stremio?.hide_completed_from_queue ?? false,
 		hide_completed_after_seconds: config.stremio?.hide_completed_after_seconds ?? 60,
+		treat_addurl_as_stremio: config.stremio?.treat_addurl_as_stremio ?? false,
 		prowlarr: resolveProwlarr(config.stremio?.prowlarr),
 	});
 	const [hasChanges, setHasChanges] = useState(false);
@@ -119,6 +120,7 @@ export function StremioConfigSection({
 			base_url: config.stremio?.base_url ?? "",
 			hide_completed_from_queue: config.stremio?.hide_completed_from_queue ?? false,
 			hide_completed_after_seconds: config.stremio?.hide_completed_after_seconds ?? 60,
+			treat_addurl_as_stremio: config.stremio?.treat_addurl_as_stremio ?? false,
 			prowlarr: resolveProwlarr(config.stremio?.prowlarr),
 		});
 		setHasChanges(false);
@@ -132,6 +134,7 @@ export function StremioConfigSection({
 			updated.base_url !== (orig?.base_url ?? "") ||
 			updated.hide_completed_from_queue !== (orig?.hide_completed_from_queue ?? false) ||
 			updated.hide_completed_after_seconds !== (orig?.hide_completed_after_seconds ?? 60) ||
+			updated.treat_addurl_as_stremio !== (orig?.treat_addurl_as_stremio ?? false) ||
 			JSON.stringify(updated.prowlarr) !== JSON.stringify(orig?.prowlarr ?? DEFAULT_PROWLARR);
 		setHasChanges(changed);
 	};
@@ -297,6 +300,30 @@ export function StremioConfigSection({
 							never delete.
 						</p>
 					</fieldset>
+
+					<div className="flex items-center justify-between gap-4">
+						<div className="min-w-0 flex-1">
+							<h5 className="break-words font-bold text-sm">
+								Treat SABnzbd URL additions as Stremio
+							</h5>
+							<p className="mt-1 break-words text-[11px] text-base-content/50 leading-relaxed">
+								Tags NZBs added via the SABnzbd{" "}
+								<code className="rounded bg-base-300 px-1 py-0.5 font-mono text-[10px]">
+									addurl
+								</code>{" "}
+								API (used by streaming clients like AIOStreams) so they get the Cache TTL cleanup
+								and queue hiding below. Sonarr/Radarr upload NZB files directly and are never
+								affected.
+							</p>
+						</div>
+						<input
+							type="checkbox"
+							className="toggle toggle-primary mt-1 shrink-0"
+							checked={formData.treat_addurl_as_stremio}
+							disabled={isReadOnly}
+							onChange={(e) => update({ treat_addurl_as_stremio: e.target.checked })}
+						/>
+					</div>
 
 					<div className="flex items-center justify-between gap-4">
 						<div className="min-w-0 flex-1">

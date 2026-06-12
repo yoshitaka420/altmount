@@ -669,6 +669,7 @@ export interface StremioConfig {
 	base_url?: string;
 	hide_completed_from_queue: boolean;
 	hide_completed_after_seconds: number;
+	treat_addurl_as_stremio: boolean;
 	prowlarr: ProwlarrConfig;
 }
 

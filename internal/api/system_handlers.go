@@ -29,8 +29,14 @@ var lastMissingWarnTime sync.Map
 //	@Security		BearerAuth
 //	@Router			/system/stats [get]
 func (s *Server) handleGetSystemStats(c *fiber.Ctx) error {
-	// Get queue statistics
-	queueStats, err := s.queueRepo.GetQueueStats(c.Context())
+	// Get queue statistics, excluding hidden Stremio items so counters match
+	// the filtered queue listing
+	var hideStremioBefore *time.Time
+	if s.configManager != nil {
+		hideStremioBefore = stremioHideCutoff(s.configManager.GetConfig())
+	}
+
+	queueStats, err := s.queueRepo.GetQueueStats(c.Context(), hideStremioBefore)
 	if err != nil {
 		return RespondInternalError(c, "Failed to retrieve queue statistics", err.Error())
 	}

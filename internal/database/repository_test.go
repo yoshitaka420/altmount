@@ -284,4 +284,28 @@ func TestListQueueItems_HideStremioCompleted(t *testing.T) {
 		ids = append(ids, it.ID)
 	}
 	assert.ElementsMatch(t, []int64{1, 2, 4}, ids)
+
+	// Queue stats must agree with the filtered listing
+	_, err = db.Exec(`
+		CREATE TABLE queue_stats (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			total_queued INTEGER NOT NULL DEFAULT 0,
+			total_processing INTEGER NOT NULL DEFAULT 0,
+			total_completed INTEGER NOT NULL DEFAULT 0,
+			total_failed INTEGER NOT NULL DEFAULT 0,
+			avg_processing_time_ms INTEGER DEFAULT NULL,
+			last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		INSERT INTO queue_stats (total_queued, total_processing, total_completed, total_failed) VALUES (0, 0, 0, 0);
+	`)
+	require.NoError(t, err)
+
+	stats, err := repo.GetQueueStats(ctx, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 4, stats.TotalCompleted, "nil cutoff counts all completed rows")
+
+	stats, err = repo.GetQueueStats(ctx, &cutoff)
+	require.NoError(t, err)
+	assert.Equal(t, 3, stats.TotalCompleted, "cutoff excludes the hidden stremio row")
+	assert.Equal(t, 1, stats.TotalFailed, "failed count unaffected")
 }

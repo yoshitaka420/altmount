@@ -205,6 +205,7 @@ type StremioAPIResponse struct {
 	BaseURL                   string              `json:"base_url,omitempty"`
 	HideCompletedFromQueue    bool                `json:"hide_completed_from_queue"`
 	HideCompletedAfterSeconds int                 `json:"hide_completed_after_seconds"`
+	TreatAddURLAsStremio      bool                `json:"treat_addurl_as_stremio"`
 	Prowlarr                  ProwlarrAPIResponse `json:"prowlarr"`
 }
 
@@ -378,6 +379,7 @@ func ToConfigAPIResponse(cfg *config.Config, apiKey string) *ConfigAPIResponse {
 		BaseURL:                   cfg.Stremio.BaseURL,
 		HideCompletedFromQueue:    cfg.Stremio.ShouldHideCompletedFromQueue(),
 		HideCompletedAfterSeconds: cfg.Stremio.HideCompletedAfterSeconds,
+		TreatAddURLAsStremio:      cfg.Stremio.ShouldTreatAddURLAsStremio(),
 		Prowlarr: ProwlarrAPIResponse{
 			Enabled:    cfg.Stremio.Prowlarr.Enabled != nil && *cfg.Stremio.Prowlarr.Enabled,
 			Host:       cfg.Stremio.Prowlarr.Host,

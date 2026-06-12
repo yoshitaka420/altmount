@@ -48,6 +48,7 @@ stremio:
   base_url: ""        # optional — set if auto-detection gives the wrong origin
   hide_completed_from_queue: false  # hide completed Stremio items from queue/history views
   hide_completed_after_seconds: 60  # grace period before hiding (0 = hide immediately)
+  treat_addurl_as_stremio: false    # tag SABnzbd addurl imports (e.g. AIOStreams) as Stremio
   prowlarr:
     enabled: true
     host: "http://localhost:9696"
@@ -64,6 +65,7 @@ stremio:
 | `base_url` | string | `""` | Public base URL used when building stream and manifest links (e.g. `https://altmount.example.com`). When empty, AltMount auto-detects the origin from the incoming request. Set this when running behind a reverse proxy or when the detected origin is wrong. |
 | `hide_completed_from_queue` | bool | `false` | Hide completed Stremio-originated downloads from the AltMount queue page and the SABnzbd history endpoint after the grace period. Items remain cached and streamable until the TTL cleanup removes them. |
 | `hide_completed_after_seconds` | int | `60` | Grace period after completion before a Stremio item is hidden. `0` hides immediately. Only applies when `hide_completed_from_queue` is enabled. |
+| `treat_addurl_as_stremio` | bool | `false` | Tag NZBs added via the SABnzbd `addurl` API with the `stremio:` download ID prefix so they get the TTL cleanup and queue hiding. Streaming clients like AIOStreams add NZBs via `addurl`; Sonarr/Radarr upload NZB files via `addfile` and are never tagged. |
 
 When `nzb_ttl_hours` is greater than zero, submitting the same NZB filename within the TTL window returns the cached stream URLs immediately without re-queueing or re-downloading.
 
