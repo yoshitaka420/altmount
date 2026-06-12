@@ -200,10 +200,12 @@ type ArrsInstanceAPIResponse struct {
 
 // StremioAPIResponse sanitizes Stremio config for API responses
 type StremioAPIResponse struct {
-	Enabled     bool                `json:"enabled"`
-	NzbTTLHours int                 `json:"nzb_ttl_hours,omitempty"`
-	BaseURL     string              `json:"base_url,omitempty"`
-	Prowlarr    ProwlarrAPIResponse `json:"prowlarr"`
+	Enabled                   bool                `json:"enabled"`
+	NzbTTLHours               int                 `json:"nzb_ttl_hours,omitempty"`
+	BaseURL                   string              `json:"base_url,omitempty"`
+	HideCompletedFromQueue    bool                `json:"hide_completed_from_queue"`
+	HideCompletedAfterSeconds int                 `json:"hide_completed_after_seconds"`
+	Prowlarr                  ProwlarrAPIResponse `json:"prowlarr"`
 }
 
 // ProwlarrAPIResponse sanitizes Prowlarr config for API responses
@@ -371,9 +373,11 @@ func ToConfigAPIResponse(cfg *config.Config, apiKey string) *ConfigAPIResponse {
 	}
 
 	stremioResp := StremioAPIResponse{
-		Enabled:     cfg.Stremio.Enabled != nil && *cfg.Stremio.Enabled,
-		NzbTTLHours: cfg.Stremio.NzbTTLHours,
-		BaseURL:     cfg.Stremio.BaseURL,
+		Enabled:                   cfg.Stremio.Enabled != nil && *cfg.Stremio.Enabled,
+		NzbTTLHours:               cfg.Stremio.NzbTTLHours,
+		BaseURL:                   cfg.Stremio.BaseURL,
+		HideCompletedFromQueue:    cfg.Stremio.ShouldHideCompletedFromQueue(),
+		HideCompletedAfterSeconds: cfg.Stremio.HideCompletedAfterSeconds,
 		Prowlarr: ProwlarrAPIResponse{
 			Enabled:    cfg.Stremio.Prowlarr.Enabled != nil && *cfg.Stremio.Prowlarr.Enabled,
 			Host:       cfg.Stremio.Prowlarr.Host,

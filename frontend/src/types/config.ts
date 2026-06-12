@@ -667,6 +667,8 @@ export interface StremioConfig {
 	enabled: boolean;
 	nzb_ttl_hours: number;
 	base_url?: string;
+	hide_completed_from_queue: boolean;
+	hide_completed_after_seconds: number;
 	prowlarr: ProwlarrConfig;
 }
 

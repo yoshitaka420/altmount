@@ -171,8 +171,22 @@ type StremioConfig struct {
 	// (e.g. "https://altmount.example.com"). Falls back to the auto-detected
 	// request origin when not set.
 	BaseURL string `yaml:"base_url" mapstructure:"base_url" json:"base_url,omitempty"`
+	// HideCompletedFromQueue hides completed Stremio-originated queue items from the
+	// web UI queue and SABnzbd history once they are older than HideCompletedAfterSeconds.
+	// Rows are only hidden from listings; they remain in the database as the stream
+	// cache index until the TTL cleanup removes them. Disabled by default.
+	HideCompletedFromQueue *bool `yaml:"hide_completed_from_queue" mapstructure:"hide_completed_from_queue" json:"hide_completed_from_queue"`
+	// HideCompletedAfterSeconds is the grace period after completion before a
+	// Stremio item is hidden (0 = hide immediately). Defaults to 60 seconds.
+	HideCompletedAfterSeconds int `yaml:"hide_completed_after_seconds" mapstructure:"hide_completed_after_seconds" json:"hide_completed_after_seconds"`
 	// Prowlarr configures the Prowlarr indexer used by the Stremio addon to search for NZBs.
 	Prowlarr ProwlarrConfig `yaml:"prowlarr" mapstructure:"prowlarr" json:"prowlarr"`
+}
+
+// ShouldHideCompletedFromQueue returns whether completed Stremio-originated queue
+// items should be hidden from queue and history listings.
+func (s StremioConfig) ShouldHideCompletedFromQueue() bool {
+	return s.HideCompletedFromQueue != nil && *s.HideCompletedFromQueue
 }
 
 // AuthConfig represents authentication configuration
@@ -767,6 +781,11 @@ func (c *Config) Validate() error {
 	}
 
 	// Validate streaming configuration
+
+	// Validate stremio configuration
+	if c.Stremio.HideCompletedAfterSeconds < 0 {
+		return fmt.Errorf("stremio hide_completed_after_seconds must be non-negative")
+	}
 
 	// Validate health configuration (always active)
 	if c.Health.CheckIntervalSeconds <= 0 {
@@ -1447,6 +1466,7 @@ func DefaultConfig(configDir ...string) *Config {
 	fuseEnabled := false
 	loginRequired := true           // Require login by default
 	stremioEnabled := false         // Stremio endpoint disabled by default
+	stremioHideCompleted := false   // Keep completed Stremio items visible by default
 	prowlarrEnabled := false        // Prowlarr integration disabled by default
 	watchIntervalSeconds := 10      // Default watch interval
 	failedItemRetentionHours := 24  // Default: auto-remove failed items after 24 hours
@@ -1494,8 +1514,10 @@ func DefaultConfig(configDir ...string) *Config {
 			Prefix: "/api",
 		},
 		Stremio: StremioConfig{
-			Enabled:     &stremioEnabled,
-			NzbTTLHours: 24,
+			Enabled:                   &stremioEnabled,
+			NzbTTLHours:               24,
+			HideCompletedFromQueue:    &stremioHideCompleted,
+			HideCompletedAfterSeconds: 60,
 			Prowlarr: ProwlarrConfig{
 				Enabled:    &prowlarrEnabled,
 				Host:       "http://localhost:9696",

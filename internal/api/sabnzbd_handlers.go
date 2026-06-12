@@ -820,10 +820,16 @@ func (s *Server) handleSABnzbdHistory(c *fiber.Ctx) error {
 		recentHistory = []*database.ImportHistory{} // Fallback
 	}
 
+	// Hide completed Stremio items past their grace period when configured
+	var hideStremioBefore *time.Time
+	if s.configManager != nil {
+		hideStremioBefore = stremioHideCutoff(s.configManager.GetConfig())
+	}
+
 	// Fetch items from active queue
 	// We use a larger set here to ensure we get everything for deduplication and combined history
 	completedStatus := database.QueueStatusCompleted
-	completedQueueItems, err := s.queueRepo.ListQueueItems(ctx, &completedStatus, "", categoryFilter, 2000, 0, "updated_at", "desc")
+	completedQueueItems, err := s.queueRepo.ListQueueItems(ctx, &completedStatus, "", categoryFilter, 2000, 0, "updated_at", "desc", hideStremioBefore)
 	if err != nil {
 		return s.writeSABnzbdErrorFiber(c, "Failed to get completed items from queue")
 	}
@@ -862,6 +868,13 @@ func (s *Server) handleSABnzbdHistory(c *fiber.Ctx) error {
 	}
 
 	for _, item := range recentHistory {
+		// Apply the same Stremio hiding to persistent history rows
+		if hideStremioBefore != nil && item.DownloadID != nil &&
+			strings.HasPrefix(*item.DownloadID, stremioDownloadIDPrefix) &&
+			item.CompletedAt.Before(*hideStremioBefore) {
+			continue
+		}
+
 		id := item.ID
 		if item.NzbID != nil {
 			id = *item.NzbID
@@ -896,7 +909,7 @@ func (s *Server) handleSABnzbdHistory(c *fiber.Ctx) error {
 
 	// Get failed items from active queue
 	failedStatus := database.QueueStatusFailed
-	failed, err := s.queueRepo.ListQueueItems(ctx, &failedStatus, "", categoryFilter, 1000, 0, "updated_at", "desc")
+	failed, err := s.queueRepo.ListQueueItems(ctx, &failedStatus, "", categoryFilter, 1000, 0, "updated_at", "desc", nil)
 	if err != nil {
 		return s.writeSABnzbdErrorFiber(c, "Failed to get failed items")
 	}

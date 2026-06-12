@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"sync"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -216,4 +217,71 @@ func TestClaimNextQueueItem_PriorityOrdering(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, item3)
 	assert.Equal(t, int64(1), item3.ID, "Should claim low priority item last")
+}
+
+func TestListQueueItems_HideStremioCompleted(t *testing.T) {
+	db, err := sql.Open("sqlite3", "file:test_hide_stremio?mode=memory&cache=shared")
+	require.NoError(t, err, "Failed to open in-memory database")
+	defer db.Close()
+
+	setupQueueSchema(t, db)
+	repo := NewRepository(db, DialectSQLite)
+	ctx := context.Background()
+
+	now := time.Now()
+	oldCompleted := now.Add(-10 * time.Minute)
+	justCompleted := now.Add(-5 * time.Second)
+
+	insert := func(id int64, nzbPath string, downloadID *string, status string, completedAt *time.Time) {
+		_, err := db.Exec(
+			`INSERT INTO import_queue (id, nzb_path, download_id, status, completed_at, priority) VALUES (?, ?, ?, ?, ?, 1)`,
+			id, nzbPath, downloadID, status, completedAt,
+		)
+		require.NoError(t, err)
+	}
+
+	stremioOld := "stremio:aaa"
+	stremioFresh := "stremio:bbb"
+	stremioFailed := "stremio:ccc"
+	arrID := "sonarr-guid"
+
+	insert(1, "arr-no-id.nzb", nil, "completed", &oldCompleted)
+	insert(2, "arr-with-id.nzb", &arrID, "completed", &oldCompleted)
+	insert(3, "stremio-old.nzb", &stremioOld, "completed", &oldCompleted)
+	insert(4, "stremio-fresh.nzb", &stremioFresh, "completed", &justCompleted)
+	insert(5, "stremio-failed.nzb", &stremioFailed, "failed", nil)
+
+	// Nil cutoff: nothing hidden
+	items, err := repo.ListQueueItems(ctx, nil, "", "", 100, 0, "created_at", "asc", nil)
+	require.NoError(t, err)
+	assert.Len(t, items, 5, "nil cutoff must return all rows")
+
+	count, err := repo.CountQueueItems(ctx, nil, "", "", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 5, count)
+
+	// Cutoff 60s ago: only the old completed stremio row is hidden
+	cutoff := now.Add(-60 * time.Second)
+	items, err = repo.ListQueueItems(ctx, nil, "", "", 100, 0, "created_at", "asc", &cutoff)
+	require.NoError(t, err)
+	ids := make([]int64, 0, len(items))
+	for _, it := range items {
+		ids = append(ids, it.ID)
+	}
+	assert.ElementsMatch(t, []int64{1, 2, 4, 5}, ids,
+		"only the completed stremio row older than the cutoff should be hidden")
+
+	count, err = repo.CountQueueItems(ctx, nil, "", "", &cutoff)
+	require.NoError(t, err)
+	assert.Equal(t, len(items), count, "count must agree with list")
+
+	// Status filter still composes with the hide condition
+	completed := QueueStatusCompleted
+	items, err = repo.ListQueueItems(ctx, &completed, "", "", 100, 0, "created_at", "asc", &cutoff)
+	require.NoError(t, err)
+	ids = ids[:0]
+	for _, it := range items {
+		ids = append(ids, it.ID)
+	}
+	assert.ElementsMatch(t, []int64{1, 2, 4}, ids)
 }

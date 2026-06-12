@@ -347,7 +347,7 @@ func (s *Server) handleStremioAddonPlay(c *fiber.Ctx) error {
 	// Short-circuit: return cached stream if already processed within TTL
 	ttlHours := cfg.Stremio.NzbTTLHours
 	completedStatus := database.QueueStatusCompleted
-	if existing, err := s.queueRepo.ListQueueItems(ctx, &completedStatus, safeFilename, "", 1, 0, "updated_at", "desc"); err == nil && len(existing) > 0 {
+	if existing, err := s.queueRepo.ListQueueItems(ctx, &completedStatus, safeFilename, "", 1, 0, "updated_at", "desc", nil); err == nil && len(existing) > 0 {
 		prev := existing[0]
 		cacheValid := prev.StoragePath != nil && *prev.StoragePath != ""
 		if cacheValid && ttlHours > 0 && prev.CompletedAt != nil {
@@ -372,7 +372,7 @@ func (s *Server) handleStremioAddonPlay(c *fiber.Ctx) error {
 
 	// Short-circuit: join existing active queue item
 	if inQueue, _ := s.queueRepo.IsFileInQueue(ctx, tempPath); inQueue {
-		if activeItems, err := s.queueRepo.ListQueueItems(ctx, nil, safeFilename, "", 1, 0, "updated_at", "desc"); err == nil && len(activeItems) > 0 {
+		if activeItems, err := s.queueRepo.ListQueueItems(ctx, nil, safeFilename, "", 1, 0, "updated_at", "desc", nil); err == nil && len(activeItems) > 0 {
 			return s.waitAndRedirectToStream(c, activeItems[0].ID, baseURL, key, nzbName, 300)
 		}
 	}

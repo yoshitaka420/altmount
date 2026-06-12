@@ -725,8 +725,16 @@ func (r *Repository) UpdateQueueStats(ctx context.Context) error {
 	return nil
 }
 
-// ListQueueItems retrieves queue items with optional filtering
-func (r *Repository) ListQueueItems(ctx context.Context, status *QueueStatus, search string, category string, limit, offset int, sortBy, sortOrder string) ([]*ImportQueueItem, error) {
+// hiddenStremioCondition excludes completed Stremio-originated items whose
+// completed_at is older than the bound cutoff timestamp. The download_id IS NULL
+// guard is required: NULL NOT LIKE evaluates to NULL and would otherwise hide
+// every row without a download_id.
+const hiddenStremioCondition = "(download_id IS NULL OR download_id NOT LIKE 'stremio:%' OR status != 'completed' OR completed_at IS NULL OR completed_at >= ?)"
+
+// ListQueueItems retrieves queue items with optional filtering.
+// When hideStremioCompletedBefore is non-nil, completed Stremio-originated items
+// (download_id prefixed "stremio:") completed before the cutoff are excluded.
+func (r *Repository) ListQueueItems(ctx context.Context, status *QueueStatus, search string, category string, limit, offset int, sortBy, sortOrder string, hideStremioCompletedBefore *time.Time) ([]*ImportQueueItem, error) {
 	var query string
 	var args []any
 
@@ -751,6 +759,11 @@ func (r *Repository) ListQueueItems(ctx context.Context, status *QueueStatus, se
 	if category != "" {
 		conditions = append(conditions, "LOWER(category) = LOWER(?)")
 		conditionArgs = append(conditionArgs, category)
+	}
+
+	if hideStremioCompletedBefore != nil {
+		conditions = append(conditions, hiddenStremioCondition)
+		conditionArgs = append(conditionArgs, *hideStremioCompletedBefore)
 	}
 
 	if len(conditions) > 0 {
@@ -876,8 +889,10 @@ func (r *Repository) ListActiveQueueItems(ctx context.Context, search string, ca
 	return items, rows.Err()
 }
 
-// CountQueueItems counts the total number of queue items matching the given filters
-func (r *Repository) CountQueueItems(ctx context.Context, status *QueueStatus, search string, category string) (int, error) {
+// CountQueueItems counts the total number of queue items matching the given filters.
+// When hideStremioCompletedBefore is non-nil, completed Stremio-originated items
+// (download_id prefixed "stremio:") completed before the cutoff are excluded.
+func (r *Repository) CountQueueItems(ctx context.Context, status *QueueStatus, search string, category string, hideStremioCompletedBefore *time.Time) (int, error) {
 	var query string
 	var args []any
 
@@ -900,6 +915,11 @@ func (r *Repository) CountQueueItems(ctx context.Context, status *QueueStatus, s
 	if category != "" {
 		conditions = append(conditions, "LOWER(category) = LOWER(?)")
 		conditionArgs = append(conditionArgs, category)
+	}
+
+	if hideStremioCompletedBefore != nil {
+		conditions = append(conditions, hiddenStremioCondition)
+		conditionArgs = append(conditionArgs, *hideStremioCompletedBefore)
 	}
 
 	if len(conditions) > 0 {

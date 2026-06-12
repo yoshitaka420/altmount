@@ -120,14 +120,20 @@ func (s *Server) handleListQueue(c *fiber.Ctx) error {
 		sinceFilter = since
 	}
 
+	// Hide completed Stremio items past their grace period when configured
+	var hideStremioBefore *time.Time
+	if s.configManager != nil {
+		hideStremioBefore = stremioHideCutoff(s.configManager.GetConfig())
+	}
+
 	// Get total count for pagination
-	totalCount, err := s.queueRepo.CountQueueItems(c.Context(), statusFilter, searchFilter, "")
+	totalCount, err := s.queueRepo.CountQueueItems(c.Context(), statusFilter, searchFilter, "", hideStremioBefore)
 	if err != nil {
 		return RespondInternalError(c, "Failed to count queue items", err.Error())
 	}
 
 	// Get queue items from repository
-	items, err := s.queueRepo.ListQueueItems(c.Context(), statusFilter, searchFilter, "", pagination.Limit, pagination.Offset, sortBy, sortOrder)
+	items, err := s.queueRepo.ListQueueItems(c.Context(), statusFilter, searchFilter, "", pagination.Limit, pagination.Offset, sortBy, sortOrder, hideStremioBefore)
 	if err != nil {
 		return RespondInternalError(c, "Failed to retrieve queue items", err.Error())
 	}

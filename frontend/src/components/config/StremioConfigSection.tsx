@@ -105,6 +105,8 @@ export function StremioConfigSection({
 		enabled: config.stremio?.enabled ?? false,
 		nzb_ttl_hours: config.stremio?.nzb_ttl_hours ?? 24,
 		base_url: config.stremio?.base_url ?? "",
+		hide_completed_from_queue: config.stremio?.hide_completed_from_queue ?? false,
+		hide_completed_after_seconds: config.stremio?.hide_completed_after_seconds ?? 60,
 		prowlarr: resolveProwlarr(config.stremio?.prowlarr),
 	});
 	const [hasChanges, setHasChanges] = useState(false);
@@ -115,6 +117,8 @@ export function StremioConfigSection({
 			enabled: config.stremio?.enabled ?? false,
 			nzb_ttl_hours: config.stremio?.nzb_ttl_hours ?? 24,
 			base_url: config.stremio?.base_url ?? "",
+			hide_completed_from_queue: config.stremio?.hide_completed_from_queue ?? false,
+			hide_completed_after_seconds: config.stremio?.hide_completed_after_seconds ?? 60,
 			prowlarr: resolveProwlarr(config.stremio?.prowlarr),
 		});
 		setHasChanges(false);
@@ -126,6 +130,8 @@ export function StremioConfigSection({
 			updated.enabled !== (orig?.enabled ?? false) ||
 			updated.nzb_ttl_hours !== (orig?.nzb_ttl_hours ?? 24) ||
 			updated.base_url !== (orig?.base_url ?? "") ||
+			updated.hide_completed_from_queue !== (orig?.hide_completed_from_queue ?? false) ||
+			updated.hide_completed_after_seconds !== (orig?.hide_completed_after_seconds ?? 60) ||
 			JSON.stringify(updated.prowlarr) !== JSON.stringify(orig?.prowlarr ?? DEFAULT_PROWLARR);
 		setHasChanges(changed);
 	};
@@ -289,6 +295,44 @@ export function StremioConfigSection({
 						<p className="label min-w-0 max-w-full whitespace-normal break-words text-base-content/50 text-xs">
 							How long AltMount keeps the cached NZB/meta file on disk. Set to <strong>0</strong> to
 							never delete.
+						</p>
+					</fieldset>
+
+					<div className="flex items-center justify-between gap-4">
+						<div className="min-w-0 flex-1">
+							<h5 className="break-words font-bold text-sm">
+								Hide completed Stremio downloads from queue
+							</h5>
+							<p className="mt-1 break-words text-[11px] text-base-content/50 leading-relaxed">
+								Removes completed Stremio downloads from the queue and SABnzbd history views after
+								the grace period below. They stay cached and streamable until the Cache TTL deletes
+								them (with TTL <strong>0</strong> they are kept forever but stay hidden).
+							</p>
+						</div>
+						<input
+							type="checkbox"
+							className="toggle toggle-primary mt-1 shrink-0"
+							checked={formData.hide_completed_from_queue}
+							disabled={isReadOnly}
+							onChange={(e) => update({ hide_completed_from_queue: e.target.checked })}
+						/>
+					</div>
+
+					<fieldset className="fieldset min-w-0">
+						<legend className="fieldset-legend">Hide after (seconds)</legend>
+						<input
+							type="number"
+							className="input w-32 max-w-full"
+							min={0}
+							value={formData.hide_completed_after_seconds}
+							disabled={isReadOnly || !formData.hide_completed_from_queue}
+							onChange={(e) =>
+								update({ hide_completed_after_seconds: Math.max(0, Number(e.target.value)) })
+							}
+						/>
+						<p className="label min-w-0 max-w-full whitespace-normal break-words text-base-content/50 text-xs">
+							Grace period after completion before the item is hidden. Set to <strong>0</strong> to
+							hide immediately.
 						</p>
 					</fieldset>
 				</div>

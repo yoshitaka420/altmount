@@ -11,9 +11,23 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
+	"github.com/javi11/altmount/internal/config"
 	"github.com/javi11/altmount/internal/database"
 	"github.com/javi11/altmount/internal/importer/utils/nzbtrim"
 )
+
+// stremioHideCutoff returns the completed_at cutoff before which completed
+// Stremio-originated queue items should be hidden from listings, or nil when
+// hiding is disabled. Hidden items stay in the database as the stream cache
+// index until the TTL cleanup removes them.
+func stremioHideCutoff(cfg *config.Config) *time.Time {
+	if cfg == nil || !cfg.Stremio.ShouldHideCompletedFromQueue() {
+		return nil
+	}
+	cutoff := time.Now().Add(-time.Duration(cfg.Stremio.HideCompletedAfterSeconds) * time.Second)
+	return &cutoff
+}
 
 // mediaExtensions lists common video/media file extensions for Stremio stream filtering.
 var mediaExtensions = map[string]bool{
@@ -129,7 +143,7 @@ func (s *Server) handleNzbStreams(c *fiber.Ctx) error {
 	ttlHours := cfg.Stremio.NzbTTLHours
 
 	completedStatus := database.QueueStatusCompleted
-	existing, err := s.queueRepo.ListQueueItems(ctx, &completedStatus, safeFilename, "", 1, 0, "updated_at", "desc")
+	existing, err := s.queueRepo.ListQueueItems(ctx, &completedStatus, safeFilename, "", 1, 0, "updated_at", "desc", nil)
 	if err == nil && len(existing) > 0 {
 		prev := existing[0]
 		cacheValid := prev.StoragePath != nil && *prev.StoragePath != ""
@@ -151,7 +165,7 @@ func (s *Server) handleNzbStreams(c *fiber.Ctx) error {
 
 	// --- Short-circuit: join existing active queue item instead of re-adding ---
 	if inQueue, _ := s.queueRepo.IsFileInQueue(ctx, tempPath); inQueue {
-		activeItems, err := s.queueRepo.ListQueueItems(ctx, nil, safeFilename, "", 1, 0, "updated_at", "desc")
+		activeItems, err := s.queueRepo.ListQueueItems(ctx, nil, safeFilename, "", 1, 0, "updated_at", "desc", nil)
 		if err == nil && len(activeItems) > 0 {
 			return s.waitAndRespond(c, activeItems[0].ID, baseURL, downloadKey, nzbName, timeoutSecs)
 		}
@@ -182,7 +196,8 @@ func (s *Server) handleNzbStreams(c *fiber.Ctx) error {
 	}
 
 	priority := database.QueuePriorityHigh
-	item, err := s.importerService.AddToQueue(ctx, tempPath, basePath, &category, &priority, nil, nil)
+	stremioDownloadID := stremioDownloadIDPrefix + uuid.NewString()
+	item, err := s.importerService.AddToQueue(ctx, tempPath, basePath, &category, &priority, nil, &stremioDownloadID)
 	if err != nil {
 		os.Remove(tempPath)
 		return RespondInternalError(c, "Failed to add NZB to queue", err.Error())

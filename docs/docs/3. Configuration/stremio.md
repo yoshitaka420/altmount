@@ -46,6 +46,8 @@ stremio:
   enabled: true
   nzb_ttl_hours: 24   # 0 = keep cached streams forever
   base_url: ""        # optional — set if auto-detection gives the wrong origin
+  hide_completed_from_queue: false  # hide completed Stremio items from queue/history views
+  hide_completed_after_seconds: 60  # grace period before hiding (0 = hide immediately)
   prowlarr:
     enabled: true
     host: "http://localhost:9696"
@@ -60,8 +62,12 @@ stremio:
 | `enabled` | bool | `false` | Enable the Stremio integration |
 | `nzb_ttl_hours` | int | `24` | Hours before a cached NZB result expires. `0` means never expire. |
 | `base_url` | string | `""` | Public base URL used when building stream and manifest links (e.g. `https://altmount.example.com`). When empty, AltMount auto-detects the origin from the incoming request. Set this when running behind a reverse proxy or when the detected origin is wrong. |
+| `hide_completed_from_queue` | bool | `false` | Hide completed Stremio-originated downloads from the AltMount queue page and the SABnzbd history endpoint after the grace period. Items remain cached and streamable until the TTL cleanup removes them. |
+| `hide_completed_after_seconds` | int | `60` | Grace period after completion before a Stremio item is hidden. `0` hides immediately. Only applies when `hide_completed_from_queue` is enabled. |
 
 When `nzb_ttl_hours` is greater than zero, submitting the same NZB filename within the TTL window returns the cached stream URLs immediately without re-queueing or re-downloading.
+
+> **Note:** Items added before this feature (with no `stremio:` download ID) are not hidden or cleaned up automatically — remove them once via the queue page. With `nzb_ttl_hours: 0` and hiding enabled, completed items are kept forever but stay hidden.
 
 ### Prowlarr Automatic Search
 

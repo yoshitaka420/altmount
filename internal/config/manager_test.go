@@ -165,6 +165,42 @@ func TestConfig_Validate_QueueCleanupRuleAction(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid action")
 }
 
+func TestConfig_Validate_StremioHideCompleted(t *testing.T) {
+	// Build an otherwise-valid config with the given hide grace period.
+	newValidConfig := func(hideAfterSeconds int) *Config {
+		return &Config{
+			MountType: MountTypeNone,
+			Metadata:  MetadataConfig{RootPath: "/metadata"},
+			WebDAV:    WebDAVConfig{Port: 8080},
+			Streaming: StreamingConfig{MaxPrefetch: 30},
+			Import: ImportConfig{
+				MaxProcessorWorkers:            2,
+				QueueProcessingIntervalSeconds: 5,
+				MaxImportConnections:           5,
+				MaxDownloadPrefetch:            3,
+				SegmentSamplePercentage:        1,
+				ImportStrategy:                 ImportStrategyNone,
+			},
+			Health: HealthConfig{
+				CheckIntervalSeconds:          5,
+				MaxConnectionsForHealthChecks: 5,
+				MaxConcurrentJobs:             1,
+				SegmentSamplePercentage:       5,
+			},
+			Stremio: StremioConfig{
+				HideCompletedAfterSeconds: hideAfterSeconds,
+			},
+		}
+	}
+
+	assert.NoError(t, newValidConfig(0).Validate())
+	assert.NoError(t, newValidConfig(60).Validate())
+
+	err := newValidConfig(-1).Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "hide_completed_after_seconds")
+}
+
 func TestConfig_GetWebhookBaseURL(t *testing.T) {
 	tests := []struct {
 		name     string
