@@ -38,6 +38,10 @@ streaming:
   failure_masking:
     enabled: true # Automatically hide files from mounts after repeated failures
     threshold: 3 # Number of streaming failures before masking a file
+  zero_fill:
+    enabled: true # Glitch past an isolated permanently-missing segment during playback instead of failing the read
+    max_segments: 20 # Stop zero-filling and fail the read after this many missing segments in one stream
+    max_fraction: 0.02 # Stop if zero-filled bytes would exceed this fraction of the streamed range (dead release, not a glitch)
 
 # RClone configuration (optional)
 rclone:

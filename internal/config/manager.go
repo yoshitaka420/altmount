@@ -218,10 +218,23 @@ type FailureMaskingConfig struct {
 	Threshold int   `yaml:"threshold" mapstructure:"threshold" json:"threshold"`
 }
 
+// ZeroFillConfig controls mid-stream zero-filling of permanently-missing
+// segments during playback. When a single article is unreachable (430) in the
+// middle of an otherwise-healthy file, AltMount substitutes a correctly-sized
+// buffer of zeros so the player skips a fraction of a second instead of failing
+// the whole read. Bounded by MaxSegments / MaxFraction so a genuinely dead
+// release still fails honestly (and is then handled by failure masking).
+type ZeroFillConfig struct {
+	Enabled     *bool   `yaml:"enabled" mapstructure:"enabled" json:"enabled"`
+	MaxSegments int     `yaml:"max_segments" mapstructure:"max_segments" json:"max_segments"`
+	MaxFraction float64 `yaml:"max_fraction" mapstructure:"max_fraction" json:"max_fraction"`
+}
+
 // StreamingConfig represents streaming and chunking configuration
 type StreamingConfig struct {
 	MaxPrefetch    int                  `yaml:"max_prefetch" mapstructure:"max_prefetch" json:"max_prefetch"`
 	FailureMasking FailureMaskingConfig `yaml:"failure_masking" mapstructure:"failure_masking" json:"failure_masking"`
+	ZeroFill       ZeroFillConfig       `yaml:"zero_fill" mapstructure:"zero_fill" json:"zero_fill"`
 }
 
 // RCloneConfig represents rclone configuration
@@ -653,6 +666,15 @@ func (c *Config) Validate() error {
 
 	if c.Streaming.MaxPrefetch <= 0 {
 		c.Streaming.MaxPrefetch = 60 // Default to 60 segments prefetched ahead if not set
+	}
+
+	// Clamp zero-fill budgets to safe defaults when unset/invalid so an empty or
+	// partial config can never produce an unbounded cap (disable via enabled).
+	if c.Streaming.ZeroFill.MaxSegments <= 0 {
+		c.Streaming.ZeroFill.MaxSegments = 20 // Max zero-filled segments per stream
+	}
+	if c.Streaming.ZeroFill.MaxFraction <= 0 {
+		c.Streaming.ZeroFill.MaxFraction = 0.02 // Max zero-filled bytes: 2% of the streamed range
 	}
 
 	if c.Import.MaxProcessorWorkers <= 0 {
@@ -1454,6 +1476,7 @@ func DefaultConfig(configDir ...string) *Config {
 	isoAnalyzeTimeoutSeconds := 120 // Default: 120s hard cap per ISO analyse (prevents stuck NNTP from stalling import for 9+ minutes)
 	metadataBackupEnabled := false
 	failureMaskingEnabled := false
+	zeroFillEnabled := true // Glitch past isolated missing segments during playback by default
 	repairEnabled := true
 	repairExponentialBackoff := true
 
@@ -1524,6 +1547,11 @@ func DefaultConfig(configDir ...string) *Config {
 			FailureMasking: FailureMaskingConfig{
 				Enabled:   &failureMaskingEnabled,
 				Threshold: 3,
+			},
+			ZeroFill: ZeroFillConfig{
+				Enabled:     &zeroFillEnabled,
+				MaxSegments: 20,
+				MaxFraction: 0.02,
 			},
 		},
 		RClone: RCloneConfig{

@@ -1748,7 +1748,8 @@ func (mvf *MetadataVirtualFile) createUsenetReader(ctx context.Context, start, e
 		}
 	}
 
-	ur, err := usenet.NewUsenetReader(ctx, mvf.poolManager.GetPool, rg, mvf.maxPrefetch, mvf.streamTracker, mvf.streamID, mvf.segmentStore)
+	ur, err := usenet.NewUsenetReader(ctx, mvf.poolManager.GetPool, rg, mvf.maxPrefetch, mvf.streamTracker, mvf.streamID, mvf.segmentStore,
+		usenet.WithZeroFill(mvf.zeroFillOptions()))
 	if err != nil {
 		return nil, err
 	}
@@ -1759,6 +1760,23 @@ func (mvf *MetadataVirtualFile) createUsenetReader(ctx context.Context, start, e
 	ur.Start()
 
 	return ur, nil
+}
+
+// zeroFillOptions builds the streaming zero-fill policy from live config so a
+// permanently-missing article mid-file glitches a fraction of a second of video
+// instead of failing the read. Mirrors the FailureMasking default-on-when-unset
+// convention (Enabled is a *bool). Caps are clamped to safe values by
+// Config.Validate, so a zero/partial config can never disable the budget.
+func (mvf *MetadataVirtualFile) zeroFillOptions() usenet.ZeroFillOptions {
+	if mvf.configGetter == nil {
+		return usenet.ZeroFillOptions{} // no config => disabled
+	}
+	zf := mvf.configGetter().Streaming.ZeroFill
+	return usenet.ZeroFillOptions{
+		Enabled:     zf.Enabled == nil || *zf.Enabled,
+		MaxSegments: zf.MaxSegments,
+		MaxFraction: zf.MaxFraction,
+	}
 }
 
 // createNestedReader creates a reader for files backed by nested RAR sources.
@@ -1876,6 +1894,10 @@ func (mvf *MetadataVirtualFile) createUsenetReaderFromSegments(ctx context.Conte
 		return nil, fmt.Errorf("no segments cover range [%d, %d]", start, end)
 	}
 
+	// Zero-fill is deliberately NOT enabled here. This path backs nested RAR /
+	// AES-CBC sources where a zeroed article would corrupt block-chained
+	// decryption (and archive extraction) well beyond the missing region, so a
+	// missing segment must fail honestly rather than glitch.
 	ur, err := usenet.NewUsenetReader(ctx, mvf.poolManager.GetPool, rg, mvf.maxPrefetch, mvf.streamTracker, mvf.streamID, mvf.segmentStore)
 	if err != nil {
 		return nil, err
