@@ -87,10 +87,18 @@ export interface FailureMaskingConfig {
 	threshold: number;
 }
 
+// Mid-stream zero-fill configuration
+export interface ZeroFillConfig {
+	enabled: boolean;
+	max_segments: number;
+	max_fraction: number;
+}
+
 // Streaming configuration
 export interface StreamingConfig {
 	max_prefetch: number;
 	failure_masking: FailureMaskingConfig;
+	zero_fill: ZeroFillConfig;
 }
 
 // Segment cache configuration
@@ -377,6 +385,7 @@ export interface MetadataUpdateRequest {
 export interface StreamingUpdateRequest {
 	max_prefetch?: number;
 	failure_masking?: Partial<FailureMaskingConfig>;
+	zero_fill?: Partial<ZeroFillConfig>;
 }
 
 // Health update request

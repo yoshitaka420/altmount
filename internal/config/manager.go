@@ -218,10 +218,23 @@ type FailureMaskingConfig struct {
 	Threshold int   `yaml:"threshold" mapstructure:"threshold" json:"threshold"`
 }
 
+// ZeroFillConfig represents mid-stream zero-fill configuration. When a single
+// segment in the middle of an otherwise-healthy file is permanently missing
+// during playback, a correctly-sized buffer of zeros is substituted for it so
+// the player skips a fraction of a second instead of failing the whole stream.
+// The MaxSegments / MaxFraction budget keeps zero-fill from papering over a
+// genuinely-dead release.
+type ZeroFillConfig struct {
+	Enabled     *bool   `yaml:"enabled" mapstructure:"enabled" json:"enabled"`
+	MaxSegments int     `yaml:"max_segments" mapstructure:"max_segments" json:"max_segments"`
+	MaxFraction float64 `yaml:"max_fraction" mapstructure:"max_fraction" json:"max_fraction"`
+}
+
 // StreamingConfig represents streaming and chunking configuration
 type StreamingConfig struct {
 	MaxPrefetch    int                  `yaml:"max_prefetch" mapstructure:"max_prefetch" json:"max_prefetch"`
 	FailureMasking FailureMaskingConfig `yaml:"failure_masking" mapstructure:"failure_masking" json:"failure_masking"`
+	ZeroFill       ZeroFillConfig       `yaml:"zero_fill" mapstructure:"zero_fill" json:"zero_fill"`
 }
 
 // RCloneConfig represents rclone configuration
@@ -653,6 +666,16 @@ func (c *Config) Validate() error {
 
 	if c.Streaming.MaxPrefetch <= 0 {
 		c.Streaming.MaxPrefetch = 60 // Default to 60 segments prefetched ahead if not set
+	}
+
+	// Clamp the zero-fill budget to safe defaults so a partial config can't
+	// silently disable the guard rails that keep zero-fill from masking a dying
+	// release.
+	if c.Streaming.ZeroFill.MaxSegments <= 0 {
+		c.Streaming.ZeroFill.MaxSegments = 20
+	}
+	if c.Streaming.ZeroFill.MaxFraction <= 0 {
+		c.Streaming.ZeroFill.MaxFraction = 0.02
 	}
 
 	if c.Import.MaxProcessorWorkers <= 0 {
@@ -1454,6 +1477,7 @@ func DefaultConfig(configDir ...string) *Config {
 	isoAnalyzeTimeoutSeconds := 120 // Default: 120s hard cap per ISO analyse (prevents stuck NNTP from stalling import for 9+ minutes)
 	metadataBackupEnabled := false
 	failureMaskingEnabled := false
+	zeroFillEnabled := true
 	repairEnabled := true
 	repairExponentialBackoff := true
 
@@ -1524,6 +1548,11 @@ func DefaultConfig(configDir ...string) *Config {
 			FailureMasking: FailureMaskingConfig{
 				Enabled:   &failureMaskingEnabled,
 				Threshold: 3,
+			},
+			ZeroFill: ZeroFillConfig{
+				Enabled:     &zeroFillEnabled,
+				MaxSegments: 20,
+				MaxFraction: 0.02,
 			},
 		},
 		RClone: RCloneConfig{

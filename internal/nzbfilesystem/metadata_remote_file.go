@@ -1782,7 +1782,20 @@ func (mvf *MetadataVirtualFile) createUsenetReader(ctx context.Context, start, e
 		}
 	}
 
-	ur, err := usenet.NewUsenetReader(ctx, mvf.poolManager.GetPool, rg, mvf.maxPrefetch, mvf.streamTracker, mvf.streamID, mvf.segmentStore)
+	// Mid-stream zero-fill is only safe for plain (unencrypted, non-nested)
+	// streaming reads. For AES/rclone-encrypted or nested-RAR sources a zeroed
+	// block corrupts chained decryption beyond the hole, so those must fail
+	// honestly. Encrypted files reach this method only through the cipher's
+	// byte-source closure, where mvf.meta.Encryption is non-NONE; gating on it
+	// here keeps zero-fill off those paths.
+	var opts []usenet.ReaderOption
+	if mvf.meta.Encryption == metapb.Encryption_NONE && len(mvf.meta.NestedSources) == 0 {
+		if zf, ok := mvf.zeroFillOptions(); ok {
+			opts = append(opts, usenet.WithZeroFill(zf))
+		}
+	}
+
+	ur, err := usenet.NewUsenetReader(ctx, mvf.poolManager.GetPool, rg, mvf.maxPrefetch, mvf.streamTracker, mvf.streamID, mvf.segmentStore, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1793,6 +1806,37 @@ func (mvf *MetadataVirtualFile) createUsenetReader(ctx context.Context, start, e
 	ur.Start()
 
 	return ur, nil
+}
+
+// zeroFillOptions builds the streaming zero-fill options from config. It is
+// nil-safe: a missing config getter or config disables zero-fill. Returns
+// (options, true) only when zero-fill is enabled. Zero-fill defaults to on when
+// the config flag is unset.
+func (mvf *MetadataVirtualFile) zeroFillOptions() (usenet.ZeroFillOptions, bool) {
+	if mvf.configGetter == nil {
+		return usenet.ZeroFillOptions{}, false
+	}
+	cfg := mvf.configGetter()
+	if cfg == nil {
+		return usenet.ZeroFillOptions{}, false
+	}
+	zf := cfg.Streaming.ZeroFill
+	if zf.Enabled != nil && !*zf.Enabled {
+		return usenet.ZeroFillOptions{}, false
+	}
+	maxSegments := zf.MaxSegments
+	if maxSegments <= 0 {
+		maxSegments = 20
+	}
+	maxFraction := zf.MaxFraction
+	if maxFraction <= 0 {
+		maxFraction = 0.02
+	}
+	return usenet.ZeroFillOptions{
+		Enabled:     true,
+		MaxSegments: maxSegments,
+		MaxFraction: maxFraction,
+	}, true
 }
 
 // createNestedReader creates a reader for files backed by nested RAR sources.

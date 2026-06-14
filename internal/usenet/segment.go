@@ -46,6 +46,14 @@ func (r *segmentRange) GetCurrentIndex() int {
 	return r.current
 }
 
+// loaderIndex maps a range-local segment index to its absolute index in the
+// underlying SegmentLoader. startSegIdx is immutable after construction, so no
+// lock is needed. For eager ranges (no loader, startSegIdx==0) the two indices
+// are identical.
+func (r *segmentRange) loaderIndex(localIdx int) int {
+	return r.startSegIdx + localIdx
+}
+
 func (r *segmentRange) Len() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

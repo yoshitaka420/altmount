@@ -5,6 +5,7 @@ import type {
 	FailureMaskingConfig,
 	SegmentCacheConfig,
 	StreamingConfig,
+	ZeroFillConfig,
 } from "../../types/config";
 
 interface StreamingConfigSectionProps {
@@ -48,6 +49,18 @@ export function StreamingConfigSection({
 			...streamingData,
 			failure_masking: {
 				...streamingData.failure_masking,
+				[field]: value,
+			},
+		};
+		setStreamingData(newData);
+		checkChanges(newData, cacheData);
+	};
+
+	const handleZeroFillChange = (field: keyof ZeroFillConfig, value: boolean | number) => {
+		const newData = {
+			...streamingData,
+			zero_fill: {
+				...streamingData.zero_fill,
 				[field]: value,
 			},
 		};
@@ -222,6 +235,138 @@ export function StreamingConfigSection({
 									Masking a file makes it appear as "missing" to your mount. This triggers Sonarr or
 									Radarr to attempt a repair or redownload. The threshold protects against one-off
 									network glitches.
+								</div>
+							</div>
+						</div>
+					</>
+				)}
+			</div>
+
+			{/* Mid-Stream Zero-Fill */}
+			<div className="border-base-200 border-t pt-10">
+				<h3 className="font-bold text-base-content text-lg">Mid-Stream Zero-Fill</h3>
+				<p className="text-base-content/50 text-sm">
+					Survive an isolated missing article during playback by substituting silence instead of
+					failing the whole stream.
+				</p>
+			</div>
+
+			<div className="space-y-8">
+				{/* Zero-Fill Toggle */}
+				<div className="flex items-center justify-between rounded-2xl border-2 border-base-300/80 bg-base-200/60 p-6">
+					<div className="min-w-0">
+						<h4 className="font-bold text-base-content text-sm">Enable Zero-Fill</h4>
+						<p className="mt-1 break-words text-[11px] text-base-content/50 leading-relaxed">
+							When a single segment is permanently missing mid-playback, fill it with zeros so the
+							player skips a fraction of a second instead of erroring out.
+						</p>
+					</div>
+					<input
+						type="checkbox"
+						className="toggle toggle-primary"
+						checked={streamingData.zero_fill.enabled}
+						disabled={isReadOnly}
+						onChange={(e) => handleZeroFillChange("enabled", e.target.checked)}
+					/>
+				</div>
+
+				{streamingData.zero_fill.enabled && (
+					<>
+						{/* Max Segments Slider */}
+						<div className="fade-in slide-in-from-top-2 animate-in space-y-6 rounded-2xl border-2 border-base-300/80 bg-base-200/60 p-6">
+							<div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+								<div className="min-w-0">
+									<h4 className="font-bold text-base-content text-sm">Maximum Filled Segments</h4>
+									<p className="mt-1 break-words text-[11px] text-base-content/50 leading-relaxed">
+										Stop zero-filling after this many misses in a single stream, then fail honestly.
+									</p>
+								</div>
+								<div className="flex shrink-0 items-center gap-3">
+									<span className="font-black font-mono text-primary text-xl">
+										{streamingData.zero_fill.max_segments}
+									</span>
+									<span className="font-bold text-base-content/60 text-xs uppercase">segments</span>
+								</div>
+							</div>
+
+							<div className="space-y-4">
+								<input
+									type="range"
+									min="1"
+									max="100"
+									value={streamingData.zero_fill.max_segments}
+									step="1"
+									className="range range-primary range-sm w-full [&::-webkit-slider-runnable-track]:rounded-full"
+									disabled={isReadOnly}
+									onChange={(e) =>
+										handleZeroFillChange("max_segments", Number.parseInt(e.target.value, 10))
+									}
+								/>
+								<div className="flex justify-between px-2 font-black text-base-content/50 text-xs">
+									<span>1</span>
+									<span>20</span>
+									<span>40</span>
+									<span>60</span>
+									<span>80</span>
+									<span>100</span>
+								</div>
+							</div>
+						</div>
+
+						{/* Max Fraction Slider */}
+						<div className="fade-in slide-in-from-top-2 animate-in space-y-6 rounded-2xl border-2 border-base-300/80 bg-base-200/60 p-6">
+							<div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+								<div className="min-w-0">
+									<h4 className="font-bold text-base-content text-sm">Maximum Filled Fraction</h4>
+									<p className="mt-1 break-words text-[11px] text-base-content/50 leading-relaxed">
+										Stop if zero-filled bytes exceed this share of the streamed range. Scales
+										tolerance to file size so a dying release still fails.
+									</p>
+								</div>
+								<div className="flex shrink-0 items-center gap-3">
+									<span className="font-black font-mono text-primary text-xl">
+										{(streamingData.zero_fill.max_fraction * 100).toFixed(1)}
+									</span>
+									<span className="font-bold text-base-content/60 text-xs uppercase">%</span>
+								</div>
+							</div>
+
+							<div className="space-y-4">
+								<input
+									type="range"
+									min="0.5"
+									max="25"
+									value={streamingData.zero_fill.max_fraction * 100}
+									step="0.5"
+									className="range range-primary range-sm w-full [&::-webkit-slider-runnable-track]:rounded-full"
+									disabled={isReadOnly}
+									onChange={(e) =>
+										handleZeroFillChange("max_fraction", Number.parseFloat(e.target.value) / 100)
+									}
+								/>
+								<div className="flex justify-between px-2 font-black text-base-content/50 text-xs">
+									<span>0.5%</span>
+									<span>5%</span>
+									<span>10%</span>
+									<span>15%</span>
+									<span>20%</span>
+									<span>25%</span>
+								</div>
+							</div>
+						</div>
+
+						{/* Guidance */}
+						<div className="fade-in slide-in-from-top-2 alert animate-in items-start rounded-2xl border border-info/20 bg-info/5 p-4 shadow-sm">
+							<Info className="mt-0.5 h-5 w-5 shrink-0 text-info" />
+							<div className="min-w-0 flex-1">
+								<div className="font-bold text-info text-xs uppercase tracking-wider">
+									How It Works
+								</div>
+								<div className="mt-1 break-words text-[11px] leading-relaxed opacity-80">
+									Zero-fill never replaces a file's first article (which carries the container
+									header), and stops at whichever budget trips first. Once the budget is exceeded
+									the read fails normally and flows into Failure Masking so the arrs can re-grab the
+									file.
 								</div>
 							</div>
 						</div>

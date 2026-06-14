@@ -52,6 +52,40 @@ func (e *DataCorruptionError) Unwrap() error {
 	return e.UnderlyingErr
 }
 
+// ZeroFillOptions configures mid-stream zero-fill substitution for permanently
+// missing segments (nntppool.ErrArticleNotFound) on a streaming reader. When a
+// single isolated segment in the middle of an otherwise-healthy file is gone
+// during playback, a correctly-sized buffer of zeros is returned in its place so
+// the player skips a fraction of a second of corrupt audio/video and keeps going
+// instead of failing the whole stream. The zero value is disabled — zero-fill
+// only happens when Enabled is true and the reader is built WithZeroFill.
+type ZeroFillOptions struct {
+	// Enabled is the master switch for mid-stream zero-fill.
+	Enabled bool
+	// MaxSegments caps how many segments may be zero-filled in one stream.
+	// Past it, the read fails normally and flows into failure-masking. <= 0
+	// disables the count cap (not recommended).
+	MaxSegments int
+	// MaxFraction caps zero-filled bytes as a fraction of the streamed range.
+	// Scales tolerance to size so a genuinely-broken release still fails. <= 0
+	// disables the fraction cap (not recommended).
+	MaxFraction float64
+}
+
+// ReaderOption customizes a UsenetReader at construction time.
+type ReaderOption func(*UsenetReader)
+
+// WithZeroFill enables mid-stream zero-fill on the reader using the supplied
+// options. Intended only for plain (unencrypted, non-nested) streaming readers;
+// import/PAR2 and encrypted/nested readers must fail honestly on a missing
+// segment and must not use this option (a zeroed block corrupts chained
+// decryption beyond the hole).
+func WithZeroFill(o ZeroFillOptions) ReaderOption {
+	return func(r *UsenetReader) {
+		r.zeroFill = o
+	}
+}
+
 type UsenetReader struct {
 	log            *slog.Logger
 	wg             sync.WaitGroup
@@ -75,6 +109,14 @@ type UsenetReader struct {
 	// Tracing counters (atomic, no lock needed)
 	inFlight atomic.Int32 // goroutines actively downloading right now
 
+	// Zero-fill state (streaming resilience). The counters are atomic so the
+	// check-then-increment in maybeZeroFill stays lock-free in download
+	// goroutines; the budget is a soft bound (a few extra fills under
+	// concurrency are harmless).
+	zeroFill        ZeroFillOptions
+	zeroFilledCount atomic.Int64
+	zeroFilledBytes atomic.Int64
+
 	mu sync.Mutex
 }
 
@@ -86,6 +128,7 @@ func NewUsenetReader(
 	metricsTracker MetricsTracker,
 	streamID string,
 	segmentStore SegmentStore,
+	opts ...ReaderOption,
 ) (*UsenetReader, error) {
 	log := slog.Default().With("component", "usenet-reader")
 	ctx, cancel := context.WithCancel(ctx)
@@ -105,6 +148,10 @@ func NewUsenetReader(
 		metricsTracker: metricsTracker,
 		streamID:       streamID,
 		segmentStore:   segmentStore,
+	}
+
+	for _, opt := range opts {
+		opt(ur)
 	}
 
 	ur.cond = sync.NewCond(&ur.mu)
@@ -326,8 +373,10 @@ func (b *UsenetReader) GetBufferedOffset() int64 {
 	return s.Start + int64(s.SegmentSize)
 }
 
-// downloadSegmentWithRetry attempts to download a segment with retry logic for pool unavailability
-func (b *UsenetReader) downloadSegmentWithRetry(ctx context.Context, seg *segment) ([]byte, error) {
+// downloadSegmentWithRetry attempts to download a segment with retry logic for pool unavailability.
+// segIdx is the range-local index of the segment, used by maybeZeroFill to apply
+// the first-segment guard.
+func (b *UsenetReader) downloadSegmentWithRetry(ctx context.Context, seg *segment, segIdx int) ([]byte, error) {
 	// Cache HIT: skip NNTP entirely
 	if b.segmentStore != nil {
 		if data, ok := b.segmentStore.Get(seg.Id); ok {
@@ -441,12 +490,101 @@ func (b *UsenetReader) downloadSegmentWithRetry(ctx context.Context, seg *segmen
 	}
 
 	if errors.Is(err, nntppool.ErrArticleNotFound) {
+		// Streaming resilience: substitute zeros for an isolated, permanently
+		// missing segment so the player skips a fraction of a second instead of
+		// failing the whole stream. The fill is never cached (only successful
+		// downloads above reach segmentStore.Put). Returns honestly on the first
+		// segment, past the budget, or when zero-fill is disabled.
+		if fill, ok := b.maybeZeroFill(ctx, seg, segIdx); ok {
+			return fill, nil
+		}
 		b.log.DebugContext(ctx, "missing segment",
 			"segment_id", seg.Id,
 		)
 	}
 
 	return resultBytes, err
+}
+
+// zeroFillSegmentLen returns the exact byte length a zero-fill buffer must have
+// to stand in for a missing segment. The consumer (segment.GetReaderContext)
+// seeks to seg.Start then reads seg.End-seg.Start+1 bytes, so the buffer must be
+// at least End+1 bytes long; it must also be at least the physical segment size
+// so downstream offset math is identical to a real decoded article. Returning a
+// wrong length here would desync every following segment's offsets.
+func zeroFillSegmentLen(seg *segment) int64 {
+	n := seg.SegmentSize
+	if seg.End+1 > n {
+		n = seg.End + 1
+	}
+	return n
+}
+
+// rangeLen returns the total byte length of the streamed range, or 0 if unknown.
+func (b *UsenetReader) rangeLen() int64 {
+	rg := b.rg
+	if rg == nil {
+		return 0
+	}
+	n := rg.end - rg.start + 1
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
+// maybeZeroFill decides whether a permanently-missing segment may be substituted
+// with zeros so the stream survives. segIdx is the range-local index. It returns
+// (fill, true) when the substitution is allowed and within budget, or
+// (nil, false) when the read must fail honestly. The budget is a soft bound; the
+// atomic check-then-increment can let a few extra fills through under
+// concurrency, which is harmless.
+func (b *UsenetReader) maybeZeroFill(ctx context.Context, seg *segment, segIdx int) ([]byte, bool) {
+	if !b.zeroFill.Enabled {
+		return nil, false
+	}
+
+	// First-segment guard: never zero-fill the file's first article (absolute
+	// loader index 0). A missing first segment usually means a DMCA takedown /
+	// wrong file and it carries the container header, so fail honestly and let
+	// health/import logic react.
+	absIdx := segIdx
+	if b.rg != nil {
+		absIdx = b.rg.loaderIndex(segIdx)
+	}
+	if absIdx == 0 {
+		return nil, false
+	}
+
+	fillLen := zeroFillSegmentLen(seg)
+
+	// Per-stream count cap.
+	if b.zeroFill.MaxSegments > 0 && b.zeroFilledCount.Load() >= int64(b.zeroFill.MaxSegments) {
+		return nil, false
+	}
+
+	// Per-stream fraction cap — scales tolerance to the streamed range so a
+	// genuinely-broken file still fails and falls into the existing
+	// failure-masking → ARR-repair path.
+	if b.zeroFill.MaxFraction > 0 {
+		if total := b.rangeLen(); total > 0 {
+			projected := b.zeroFilledBytes.Load() + fillLen
+			if float64(projected) > b.zeroFill.MaxFraction*float64(total) {
+				return nil, false
+			}
+		}
+	}
+
+	b.zeroFilledCount.Add(1)
+	b.zeroFilledBytes.Add(fillLen)
+
+	b.log.WarnContext(ctx, "zero-filling missing segment to keep stream alive",
+		"segment_id", seg.Id,
+		"fill_bytes", fillLen,
+		"zero_filled_segments", b.zeroFilledCount.Load(),
+	)
+
+	return make([]byte, fillLen), true
 }
 
 func (b *UsenetReader) downloadManager(ctx context.Context) {
@@ -512,7 +650,7 @@ func (b *UsenetReader) downloadManager(ctx context.Context) {
 			}()
 
 			taskCtx := slogutil.With(ctx, "segment_id", s.Id, "segment_idx", segIdx)
-			data, err := b.downloadSegmentWithRetry(taskCtx, s)
+			data, err := b.downloadSegmentWithRetry(taskCtx, s, segIdx)
 
 			if err != nil {
 				s.SetError(err)

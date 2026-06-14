@@ -27,9 +27,25 @@ streaming:
   failure_masking:
     enabled: true # Automatically hide files from mounts after repeated failures
     threshold: 3 # Number of streaming failures before masking a file
+  zero_fill:
+    enabled: true # Substitute zeros for an isolated missing segment mid-playback (default: true)
+    max_segments: 20 # Stop zero-filling after this many misses in one stream (default: 20)
+    max_fraction: 0.02 # Stop if zero-filled bytes exceed this fraction of the streamed range (default: 0.02)
 ```
 
 Higher values improve playback smoothness for high-bitrate content but increase memory usage. Lower values are better for resource-constrained environments.
+
+## Mid-Stream Zero-Fill
+
+When a **single** article in the middle of an otherwise-healthy file is permanently missing (e.g. a `430 Article Not Found`) **during playback**, AltMount can substitute a correctly-sized buffer of zeros for that one segment instead of failing the entire stream. The player skips a fraction of a second of corrupt audio/video and keeps going.
+
+Zero-fill is deliberately conservative so it never hides a genuinely-broken release:
+
+- **First-segment guard**: the file's first article (which carries the container header) is never zero-filled — a missing first segment usually means a DMCA takedown or wrong file, so it fails honestly.
+- **`max_segments`**: a hard cap on how many segments may be zero-filled within a single stream.
+- **`max_fraction`**: a cap on zero-filled bytes as a fraction of the streamed range, scaling tolerance to file size so small files bail sooner than large ones.
+
+Once either budget is exceeded the read fails normally and flows into [Failure Masking](#failure-masking) so the arrs can re-grab the file. Zero-fill applies only to plain (unencrypted, non-nested) streaming reads — encrypted and nested-RAR sources always fail honestly because a zeroed block would corrupt chained decryption. A successful zero-fill is logged at `WARN` and never marks the file as broken.
 
 ## Failure Masking
 
