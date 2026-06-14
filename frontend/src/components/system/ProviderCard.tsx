@@ -55,37 +55,37 @@ export function ProviderCard({ provider, className, onResetQuota }: ProviderCard
 			? Math.round((provider.used_connections / provider.max_connections) * 100)
 			: 0;
 
-	// Determine state badge color and icon
-	const getStateBadge = () => {
+	// Determine badge/indicator color and label from the provider's derived
+	// health state (healthy | degraded | unreachable | quota_exceeded). Legacy
+	// active/failed/pending values are kept for backward compatibility.
+	const getStateVisual = () => {
 		const state = provider.state.toLowerCase();
 
 		switch (state) {
+			case "healthy":
 			case "active":
-				return {
-					color: "badge-success",
-					text: "Active",
-				};
+				// A healthy provider with a creeping error count gets a warning
+				// tint without losing its healthy verdict.
+				return provider.error_count > 10
+					? { badge: "badge-warning", dot: "bg-warning", text: "Healthy" }
+					: { badge: "badge-success", dot: "bg-success", text: "Healthy" };
+			case "degraded":
+				return { badge: "badge-warning", dot: "bg-warning", text: "Degraded" };
+			case "unreachable":
 			case "failed":
 			case "failing":
-				return {
-					color: "badge-error",
-					text: "Failed",
-				};
+				return { badge: "badge-error", dot: "bg-error", text: "Unreachable" };
+			case "quota_exceeded":
+				return { badge: "badge-error", dot: "bg-error", text: "Quota Exceeded" };
 			case "pending":
 			case "connecting":
-				return {
-					color: "badge-warning",
-					text: "Pending",
-				};
+				return { badge: "badge-warning", dot: "bg-warning", text: "Pending" };
 			default:
-				return {
-					color: "badge-ghost",
-					text: state,
-				};
+				return { badge: "badge-ghost", dot: "bg-base-300", text: provider.state };
 		}
 	};
 
-	const stateBadge = getStateBadge();
+	const stateVisual = getStateVisual();
 
 	// Determine progress bar color based on usage
 	const getProgressColor = () => {
@@ -104,15 +104,7 @@ export function ProviderCard({ provider, className, onResetQuota }: ProviderCard
 				<div className="flex items-start justify-between">
 					<div className="min-w-0 flex-1">
 						<div className="flex items-center gap-1.5">
-							<div
-								className={`h-2 w-2 shrink-0 rounded-full ${
-									provider.state.toLowerCase() === "active"
-										? provider.error_count > 10
-											? "bg-warning"
-											: "bg-success"
-										: "bg-error"
-								}`}
-							/>
+							<div className={`h-2 w-2 shrink-0 rounded-full ${stateVisual.dot}`} />
 							<h3
 								className="truncate font-semibold text-sm leading-none"
 								id={`provider-${provider.host}`}
@@ -121,8 +113,11 @@ export function ProviderCard({ provider, className, onResetQuota }: ProviderCard
 							</h3>
 						</div>
 						<div className="mt-1 flex items-center gap-2">
-							<span className={`badge badge-xs font-medium ${stateBadge.color}`}>
-								{stateBadge.text}
+							<span
+								className={`badge badge-xs font-medium ${stateVisual.badge}`}
+								title={provider.failure_reason || undefined}
+							>
+								{stateVisual.text}
 							</span>
 							<span
 								className="cursor-pointer font-mono text-base-content/40 text-xs blur-sm transition-all hover:blur-none"
@@ -239,6 +234,21 @@ export function ProviderCard({ provider, className, onResetQuota }: ProviderCard
 								Resets <QuotaResetCountdown resetAt={provider.quota_reset_at} />
 							</div>
 						)}
+					</div>
+				)}
+
+				{/* Failure reason for unhealthy providers (degraded / unreachable /
+				    quota). Error states use an error tint, everything else warning. */}
+				{provider.failure_reason && (
+					<div
+						className={`mt-3 flex items-start gap-1.5 rounded-md px-2 py-1 text-[10px] ${
+							stateVisual.dot === "bg-error"
+								? "bg-error/10 text-error"
+								: "bg-warning/10 text-warning"
+						}`}
+					>
+						<AlertTriangle className="mt-px h-3 w-3 shrink-0" />
+						<span className="break-words">{provider.failure_reason}</span>
 					</div>
 				)}
 

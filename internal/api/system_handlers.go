@@ -599,13 +599,18 @@ func (s *Server) handleGetPoolMetrics(c *fiber.Ctx) error {
 			currentProviderSpeed = metrics.DownloadSpeedBytesPerSec * weight
 		}
 
+		state, failureReason := classifyProviderState(
+			ps.Ping.Err, ps.ActiveConnections, ps.QuotaExceeded, missingWarning,
+		)
+
 		prov := ProviderStatusResponse{
 			ID:                      providerID,
 			Host:                    host,
 			Username:                username,
 			UsedConnections:         ps.ActiveConnections,
 			MaxConnections:          ps.MaxConnections,
-			State:                   "active",
+			State:                   state,
+			FailureReason:           failureReason,
 			ErrorCount:              errorCount,
 			ByteCount:               byteCount,
 			ByteCount24h:            byteCount24h,
