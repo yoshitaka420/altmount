@@ -357,7 +357,7 @@ export function ProvidersConfigSection({
 												</div>
 												<div className="mt-1 flex items-center gap-2">
 													<div
-														className={`h-2 w-2 rounded-full ${provider.enabled ? "bg-success shadow-[0_0_8px_rgba(34,197,94,0.5)]" : "bg-base-300"}`}
+														className={`h-2 w-2 rounded-full ${provider.enabled ? "bg-success shadow-[0_0_8px_color-mix(in_oklch,var(--color-success)_50%,transparent)]" : "bg-base-300"}`}
 													/>
 													<span className="truncate font-bold text-base-content/70 text-xs uppercase tracking-wider">
 														{provider.port} •{" "}
