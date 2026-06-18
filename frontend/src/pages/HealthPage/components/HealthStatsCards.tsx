@@ -15,38 +15,36 @@ export function HealthStatsCards({ stats }: HealthStatsCardsProps) {
 		stats.total > 0 ? ((stats.corrupted / stats.total) * 100).toFixed(1) : "0.0";
 
 	return (
-		<div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
-			<div className="stat rounded-box bg-base-100 shadow">
-				<div className="stat-title">Files Tracked</div>
-				<div className="stat-value text-primary">{stats.total}</div>
-				<div className="stat-desc">Total in database</div>
+		<div className="grid grid-cols-2 gap-px overflow-hidden rounded-box border border-base-content/20 bg-base-content/20 shadow-md lg:grid-cols-3 xl:grid-cols-6">
+			<div className="space-y-1 bg-base-100 px-5 py-4">
+				<div className="text-base-content/60 text-xs">Files Tracked</div>
+				<div className="font-extrabold text-3xl text-primary">{stats.total}</div>
+				<div className="text-base-content/60 text-xs">Total in database</div>
 			</div>
-			<div className="stat rounded-box bg-base-100 shadow">
-				<div className="stat-title">Healthy</div>
-				<div className="stat-value text-success">{stats.healthy || 0}</div>
-				<div className="stat-desc">{healthyPercentage}% of total</div>
+			<div className="space-y-1 bg-base-100 px-5 py-4">
+				<div className="text-base-content/60 text-xs">Healthy</div>
+				<div className="font-extrabold text-3xl text-success">{stats.healthy || 0}</div>
+				<div className="text-base-content/60 text-xs">{healthyPercentage}% of total</div>
 			</div>
-			<div className="stat rounded-box bg-base-100 shadow">
-				<div className="stat-title">Pending</div>
-				<div className="stat-value text-info">{stats.pending || 0}</div>
-				<div className="stat-desc">Awaiting check</div>
+			<div className="space-y-1 bg-base-100 px-5 py-4">
+				<div className="text-base-content/60 text-xs">Pending</div>
+				<div className="font-extrabold text-3xl text-info">{stats.pending || 0}</div>
+				<div className="text-base-content/60 text-xs">Awaiting check</div>
 			</div>
-			<div className="stat rounded-box bg-base-100 shadow">
-				<div className="stat-title">Checking</div>
-				<div className="stat-value text-warning">{stats.checking || 0}</div>
-				<div className="stat-desc">In progress</div>
+			<div className="space-y-1 bg-base-100 px-5 py-4">
+				<div className="text-base-content/60 text-xs">Checking</div>
+				<div className="font-extrabold text-3xl text-warning">{stats.checking || 0}</div>
+				<div className="text-base-content/60 text-xs">In progress</div>
 			</div>
-			<div className="stat rounded-box bg-base-100 shadow">
-				<div className="stat-title">Repairing</div>
-				<div className="stat-value text-secondary">{stats.repair_triggered || 0}</div>
-				<div className="stat-desc">Triggered</div>
+			<div className="space-y-1 bg-base-100 px-5 py-4">
+				<div className="text-base-content/60 text-xs">Repairing</div>
+				<div className="font-extrabold text-3xl text-secondary">{stats.repair_triggered || 0}</div>
+				<div className="text-base-content/60 text-xs">Triggered</div>
 			</div>
-			<div className="stat rounded-box bg-base-100 shadow">
-				<div className="stat-title">Corrupted</div>
-				<div className="stat-value text-error">{stats.corrupted}</div>
-				<div className="stat-desc font-bold text-error">
-					{corruptedPercentage}% - Require action
-				</div>
+			<div className="space-y-1 bg-base-100 px-5 py-4">
+				<div className="text-base-content/60 text-xs">Corrupted</div>
+				<div className="font-extrabold text-3xl text-error">{stats.corrupted}</div>
+				<div className="font-bold text-error text-xs">{corruptedPercentage}% - Require action</div>
 			</div>
 		</div>
 	);

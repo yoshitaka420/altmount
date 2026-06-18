@@ -1,28 +1,6 @@
-import { CheckCircle2, Clock, Radio, Trash2, XCircle } from "lucide-react";
+import { Activity, CheckCircle2, Clock, Trash2, XCircle } from "lucide-react";
 import { formatRelativeTime } from "../../../../lib/utils";
 import type { IndexerStat } from "./types";
-
-function generatePulseMatrix(success: number, _failed: number, total: number) {
-	const dots: ("success" | "failed" | "neutral")[] = [];
-	const totalAvailable = Math.min(24, total);
-
-	const successRatio = total > 0 ? success / total : 0;
-	const successDotsCount = Math.round(totalAvailable * successRatio);
-	const failedDotsCount = totalAvailable - successDotsCount;
-
-	for (let i = 0; i < totalAvailable; i++) {
-		if (failedDotsCount > 0 && (i * failedDotsCount) % totalAvailable < failedDotsCount) {
-			dots.push("failed");
-		} else {
-			dots.push("success");
-		}
-	}
-
-	while (dots.length < 24) {
-		dots.push("neutral");
-	}
-	return dots.reverse();
-}
 
 interface IndexerHealthCardProps {
 	item: IndexerStat;
@@ -149,36 +127,18 @@ export function IndexerHealthCard({ item, onDelete }: IndexerHealthCardProps) {
 					</div>
 				</div>
 
-				{/* Import Pulse Stream */}
-				<div className="mt-4 space-y-1.5">
-					<div className="flex items-center gap-1.5 font-bold text-[9px] text-base-content/40 uppercase tracking-wider">
-						<Radio className="h-3 w-3 animate-pulse text-primary" />
-						Import Pulse Stream (Last 24)
-					</div>
-					<div className="flex flex-wrap items-center gap-1 rounded-xl border border-base-200 bg-base-200/50 p-2">
-						{generatePulseMatrix(item.success_count, item.failed_count, item.total_imports).map(
-							(dot, idx) => {
-								const dotColor =
-									dot === "success"
-										? "bg-success/80 hover:bg-success"
-										: dot === "failed"
-											? "bg-error/80 hover:bg-error"
-											: "bg-base-200/30 border border-base-200";
-								const dotTip =
-									dot === "success"
-										? "Import OK"
-										: dot === "failed"
-											? "Import Failed"
-											: "No Activity";
-								return (
-									<div
-										key={idx}
-										className={`h-2.5 w-2.5 cursor-pointer rounded-sm transition-all duration-300 hover:scale-125 ${dotColor} tooltip tooltip-top`}
-										data-tip={dotTip}
-									/>
-								);
-							},
-						)}
+				{/* Grabs in the last 24 hours */}
+				<div className="mt-4">
+					<div className="flex items-center justify-between rounded-xl border border-base-200 bg-base-200/50 px-3 py-2.5">
+						<div className="flex items-center gap-2">
+							<Activity className="h-4 w-4 text-primary" aria-hidden="true" />
+							<span className="font-bold text-[9px] text-base-content/40 uppercase tracking-wider">
+								Grabs · Last 24h
+							</span>
+						</div>
+						<span className="font-black font-mono text-base-content text-lg tabular-nums">
+							{(item.last_24h_count ?? 0).toLocaleString()}
+						</span>
 					</div>
 				</div>
 
