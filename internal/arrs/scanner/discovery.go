@@ -66,20 +66,20 @@ func (m *Manager) DiscoverFileMetadata(ctx context.Context, filePath, relativePa
 func (m *Manager) runStrictDiscovery(ctx context.Context, inst *model.ConfigInstance, filePath, cleanNzbName, libraryPath string) (*model.WebhookMetadata, error) {
 	switch inst.Type {
 	case "radarr":
-		return m.discoverRadarrStrict(ctx, filePath, cleanNzbName, libraryPath, inst.Name)
+		return m.discoverRadarrStrict(ctx, inst, filePath, cleanNzbName, libraryPath)
 	case "sonarr", "whisparr":
-		return m.discoverSonarrStrict(ctx, filePath, cleanNzbName, libraryPath, inst.Name)
+		return m.discoverSonarrStrict(ctx, inst, filePath, cleanNzbName, libraryPath)
 	case "lidarr":
-		return m.discoverLidarrStrict(ctx, filePath, cleanNzbName, libraryPath, inst.Name)
+		return m.discoverLidarrStrict(ctx, inst, filePath, cleanNzbName, libraryPath)
 	case "readarr":
-		return m.discoverReadarrStrict(ctx, filePath, cleanNzbName, libraryPath, inst.Name)
+		return m.discoverReadarrStrict(ctx, inst, filePath, cleanNzbName, libraryPath)
 	}
 	return nil, fmt.Errorf("unsupported type")
 }
 
-func (m *Manager) discoverRadarrStrict(ctx context.Context, filePath, cleanNzbName, libraryPath, instanceName string) (*model.WebhookMetadata, error) {
-	instanceConfig, _ := m.instances.FindConfigInstance("radarr", instanceName)
-	client, _ := m.clients.GetOrCreateRadarrClient(instanceName, instanceConfig.URL, instanceConfig.APIKey)
+func (m *Manager) discoverRadarrStrict(ctx context.Context, inst *model.ConfigInstance, filePath, cleanNzbName, libraryPath string) (*model.WebhookMetadata, error) {
+	instanceName := inst.Name
+	client, _ := m.clients.GetOrCreateRadarrClient(inst.Name, inst.URL, inst.APIKey)
 
 	// 1. Check Library (Active Files)
 	movies, err := m.data.GetMovies(ctx, client, instanceName)
@@ -130,9 +130,9 @@ func (m *Manager) discoverRadarrStrict(ctx context.Context, filePath, cleanNzbNa
 	return nil, fmt.Errorf("not found")
 }
 
-func (m *Manager) discoverSonarrStrict(ctx context.Context, filePath, cleanNzbName, libraryPath, instanceName string) (*model.WebhookMetadata, error) {
-	instanceConfig, _ := m.instances.FindConfigInstance("sonarr", instanceName)
-	client, _ := m.clients.GetOrCreateSonarrClient(instanceName, instanceConfig.URL, instanceConfig.APIKey)
+func (m *Manager) discoverSonarrStrict(ctx context.Context, inst *model.ConfigInstance, filePath, cleanNzbName, libraryPath string) (*model.WebhookMetadata, error) {
+	instanceName := inst.Name
+	client, _ := m.clients.GetOrCreateSonarrClient(inst.Name, inst.URL, inst.APIKey)
 
 	// 1. Check Library (Active Files)
 	series, err := m.data.GetSeries(ctx, client, instanceName)
@@ -192,10 +192,10 @@ func (m *Manager) discoverSonarrStrict(ctx context.Context, filePath, cleanNzbNa
 	return nil, fmt.Errorf("not found")
 }
 
-func (m *Manager) discoverLidarrStrict(ctx context.Context, filePath, cleanNzbName, libraryPath, instanceName string) (*model.WebhookMetadata, error) {
+func (m *Manager) discoverLidarrStrict(ctx context.Context, inst *model.ConfigInstance, filePath, cleanNzbName, libraryPath string) (*model.WebhookMetadata, error) {
 	return nil, fmt.Errorf("lidarr strict discovery not implemented")
 }
 
-func (m *Manager) discoverReadarrStrict(ctx context.Context, filePath, cleanNzbName, libraryPath, instanceName string) (*model.WebhookMetadata, error) {
+func (m *Manager) discoverReadarrStrict(ctx context.Context, inst *model.ConfigInstance, filePath, cleanNzbName, libraryPath string) (*model.WebhookMetadata, error) {
 	return nil, fmt.Errorf("readarr strict discovery not implemented")
 }
