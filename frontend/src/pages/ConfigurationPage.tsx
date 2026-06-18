@@ -471,7 +471,9 @@ export function ConfigurationPage() {
 								</div>
 							</div>
 
-							<div className="mx-auto w-full min-w-0 max-w-4xl">
+							<div
+								className={`mx-auto w-full min-w-0 ${activeSection === "providers" ? "max-w-none" : "max-w-4xl"}`}
+							>
 								{activeSection === "webdav" && (
 									<WebDAVConfigSection
 										config={config}

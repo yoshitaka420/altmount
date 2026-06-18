@@ -28,7 +28,6 @@ type SortField =
 	| "host"
 	| "state"
 	| "used_connections"
-	| "missing_count"
 	| "current_speed_bytes_per_sec"
 	| "last_speed_test_mbps"
 	| "ping_ms"
@@ -433,19 +432,6 @@ export function ProviderHealth() {
 									</th>
 									<th
 										className="cursor-pointer transition-colors hover:bg-base-200"
-										onClick={() => handleSort("missing_count")}
-									>
-										<div className="flex items-center gap-1">
-											Missing{" "}
-											<SortIcon
-												sortField={sortField}
-												sortDirection={sortDirection}
-												field="missing_count"
-											/>
-										</div>
-									</th>
-									<th
-										className="cursor-pointer transition-colors hover:bg-base-200"
 										onClick={() => handleSort("current_speed_bytes_per_sec")}
 									>
 										<div className="flex items-center gap-1">
@@ -546,21 +532,6 @@ export function ProviderHealth() {
 											{provider.error_count > 0 ? (
 												<span className="badge badge-sm border-error/20 bg-error/10 font-bold font-mono text-error">
 													{provider.error_count}
-												</span>
-											) : (
-												<span className="font-mono text-base-content/30 text-xs">0</span>
-											)}
-										</td>
-										<td>
-											{provider.missing_count > 0 ? (
-												<span
-													className={`badge badge-sm font-bold font-mono ${
-														provider.missing_warning
-															? "border-error/20 bg-error/10 text-error"
-															: "border-warning/20 bg-warning/10 text-warning"
-													}`}
-												>
-													{provider.missing_count.toLocaleString()}
 												</span>
 											) : (
 												<span className="font-mono text-base-content/30 text-xs">0</span>
