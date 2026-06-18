@@ -532,7 +532,7 @@ export function ProvidersConfigSection({
 					<p className="text-base-content/50 text-xs">{emptyHint}</p>
 				</div>
 			) : (
-				<div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+				<div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
 					{providers.map(renderProviderCard)}
 				</div>
 			)}
