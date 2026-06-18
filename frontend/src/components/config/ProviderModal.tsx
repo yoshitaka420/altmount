@@ -7,6 +7,8 @@ import type { ProviderConfig, ProviderFormData } from "../../types/config";
 interface ProviderModalProps {
 	mode: "create" | "edit";
 	provider?: ProviderConfig | null;
+	/** Seeds the "Backup Only" toggle when creating a new provider. */
+	defaultBackup?: boolean;
 	onSuccess: () => void;
 	onCancel: () => void;
 }
@@ -33,7 +35,13 @@ const defaultFormData: ProviderFormData = {
 	quota_period_hours: 0,
 };
 
-export function ProviderModal({ mode, provider, onSuccess, onCancel }: ProviderModalProps) {
+export function ProviderModal({
+	mode,
+	provider,
+	defaultBackup = false,
+	onSuccess,
+	onCancel,
+}: ProviderModalProps) {
 	const [formData, setFormData] = useState<ProviderFormData>(defaultFormData);
 	const [isTestingConnection, setIsTestingConnection] = useState(false);
 	const [connectionTestResult, setConnectionTestResult] = useState<{
@@ -76,13 +84,13 @@ export function ProviderModal({ mode, provider, onSuccess, onCancel }: ProviderM
 			// For edit mode, allow saving without testing if only non-connection fields change
 			setCanSave(true);
 		} else {
-			setFormData(defaultFormData);
+			setFormData({ ...defaultFormData, is_backup_provider: defaultBackup });
 			setQuotaEnabled(false);
 			setQuotaGbInput("1");
 			setCanSave(false);
 		}
 		setConnectionTestResult(null);
-	}, [mode, provider]);
+	}, [mode, provider, defaultBackup]);
 
 	const handleInputChange = (field: keyof ProviderFormData, value: string | number | boolean) => {
 		setFormData((prev) => ({ ...prev, [field]: value }));
