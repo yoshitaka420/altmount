@@ -157,6 +157,12 @@ func (m *Manager) GetOrCreateClient(instance *model.ConfigInstance) (any, error)
 
 // TestConnection tests the connection to an arrs instance
 func (m *Manager) TestConnection(ctx context.Context, instanceType, url, apiKey string) error {
+	// A connection test is user-facing and must fail fast: the shared client allows
+	// a long ceiling for bulk list fetches, so bound the probe to keep an
+	// unreachable instance from hanging the UI for the full client timeout.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	switch instanceType {
 	case "radarr":
 		client := radarr.New(m.starrConfig(url, apiKey))
@@ -168,7 +174,7 @@ func (m *Manager) TestConnection(ctx context.Context, instanceType, url, apiKey 
 
 	case "sonarr":
 		client := sonarr.New(m.starrConfig(url, apiKey))
-		_, err := client.GetSystemStatus()
+		_, err := client.GetSystemStatusContext(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to connect to Sonarr: %w", err)
 		}
@@ -192,7 +198,7 @@ func (m *Manager) TestConnection(ctx context.Context, instanceType, url, apiKey 
 
 	case "whisparr":
 		client := sonarr.New(m.starrConfig(url, apiKey))
-		_, err := client.GetSystemStatus()
+		_, err := client.GetSystemStatusContext(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to connect to Whisparr: %w", err)
 		}

@@ -561,26 +561,30 @@ func (m *Manager) triggerRadarrRescanByPath(ctx context.Context, client *radarr.
 			"movie_id", metadata.Movie.Id,
 			"movie_file_id", metadata.MovieFile.Id)
 
-		movies, err := m.data.GetMovies(ctx, client, instanceName)
-		if err != nil {
-			return fmt.Errorf("failed to get movies from Radarr for ID lookup: %w", err)
-		}
-		for _, movie := range movies {
-			if movie.ID == metadata.Movie.Id {
-				targetMovie = movie
+		// Targeted O(1) lookup (GET /api/v3/movie/{id}). We already know the exact
+		// Radarr movie ID from metadata, so resolve it directly instead of pulling
+		// the entire library and scanning in memory. On large instances the full
+		// list is ~100MB and takes >30s, which blows the arr HTTP timeout and leaves
+		// the item permanently unrepaired.
+		movie, lookupErr := client.GetMovieByIDContext(ctx, metadata.Movie.Id)
+		if lookupErr != nil {
+			// Not fatal: the ID may be stale or the movie removed from Radarr. Fall
+			// through to path-based matching below rather than failing the repair.
+			slog.WarnContext(ctx, "ID-based Radarr movie lookup failed, falling back to path-based matching",
+				"instance", instanceName, "movie_id", metadata.Movie.Id, "error", lookupErr)
+		} else if movie != nil {
+			targetMovie = movie
 
-				// Smart Repair Guard: Check if the movie already has a newer/different healthy file
-				if movie.HasFile && movie.MovieFile != nil {
-					if movie.MovieFile.ID != metadata.MovieFile.Id {
-						slog.InfoContext(ctx, "Smart Repair Guard: Movie already has a different healthy file (likely upgraded). Skipping repair.",
-							"movie", movie.Title,
-							"old_file_id", metadata.MovieFile.Id,
-							"new_file_id", movie.MovieFile.ID)
-						return model.ErrEpisodeAlreadySatisfied
-					}
-					targetMovieFileID = movie.MovieFile.ID
+			// Smart Repair Guard: Check if the movie already has a newer/different healthy file
+			if movie.HasFile && movie.MovieFile != nil {
+				if movie.MovieFile.ID != metadata.MovieFile.Id {
+					slog.InfoContext(ctx, "Smart Repair Guard: Movie already has a different healthy file (likely upgraded). Skipping repair.",
+						"movie", movie.Title,
+						"old_file_id", metadata.MovieFile.Id,
+						"new_file_id", movie.MovieFile.ID)
+					return model.ErrEpisodeAlreadySatisfied
 				}
-				break
+				targetMovieFileID = movie.MovieFile.ID
 			}
 		}
 	}

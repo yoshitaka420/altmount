@@ -59,7 +59,12 @@ func (m *Manager) GetMovies(ctx context.Context, client *radarr.Radarr, instance
 		}
 
 		slog.DebugContext(ctx, "Fetching fresh movie list", "instance", instanceName)
-		freshMovies, err := client.GetMovieContext(ctx, &radarr.GetMovie{})
+		// ExcludeLocalCovers drops per-movie cover-image metadata from the payload,
+		// which materially shrinks this full-library response (~100MB on large
+		// instances) without affecting the fields the callers match on (file path,
+		// scene name, IDs). This list is only fetched for the path/name-based
+		// fallbacks; the hot repair path resolves movies by ID directly.
+		freshMovies, err := client.GetMovieContext(ctx, &radarr.GetMovie{ExcludeLocalCovers: true})
 		if err != nil {
 			return nil, err
 		}

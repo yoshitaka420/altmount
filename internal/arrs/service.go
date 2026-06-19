@@ -47,7 +47,15 @@ type Service struct {
 // NewService creates a new arrs service for health monitoring and file repair
 func NewService(configGetter config.ConfigGetter, configManager model.ConfigManager, userRepo *database.UserRepository, queueRepo *database.Repository) *Service {
 	instManager := instances.NewManager(configGetter, configManager)
-	clientManager := clients.NewManager(httpclient.NewForExternal(configGetter().Network, 30*time.Second))
+	// 2-minute ceiling: nearly all arr calls return in well under a second, but the
+	// bulk movie/series list fetches used by the path/name-based ownership and
+	// discovery fallbacks scale with library size (an ~80k-movie Radarr list is
+	// ~100MB and takes >30s). Those fetches are cached (see arrs/data), so this
+	// generous ceiling is paid only on a cold cache and is purely a safety net — the
+	// hot repair path resolves movies by ID (O(1)) and never depends on it.
+	// Latency-sensitive callers (the health probe and the connection test) impose
+	// their own shorter deadlines so this higher ceiling can't stall them.
+	clientManager := clients.NewManager(httpclient.NewForExternal(configGetter().Network, 2*time.Minute))
 	dataManager := data.NewManager()
 	// One failure tracker shared by every AltMount→arr re-acquire producer: the
 	// queue-cleanup worker and the scanner (repair re-triggers) count the same
@@ -290,42 +298,48 @@ func (s *Service) GetHealth(ctx context.Context) (map[string]any, error) {
 
 		var health any
 
+		// A health probe must fail fast: the shared arr client allows a long ceiling
+		// for bulk list fetches, so bound each reachability check independently to
+		// keep one unreachable instance from stalling the whole sweep.
+		probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+
 		switch instance.Type {
 		case "radarr":
 			client, err := s.clients.GetOrCreateRadarrClient(instance.Name, instance.URL, instance.APIKey)
 			if err == nil {
-				_ = client.GetInto(ctx, starr.Request{URI: "/health"}, &health)
+				_ = client.GetInto(probeCtx, starr.Request{URI: "/health"}, &health)
 			}
 		case "sonarr":
 			client, err := s.clients.GetOrCreateSonarrClient(instance.Name, instance.URL, instance.APIKey)
 			if err == nil {
-				_ = client.GetInto(ctx, starr.Request{URI: "/health"}, &health)
+				_ = client.GetInto(probeCtx, starr.Request{URI: "/health"}, &health)
 			}
 		case "lidarr":
 			client, err := s.clients.GetOrCreateLidarrClient(instance.Name, instance.URL, instance.APIKey)
 			if err == nil {
-				_ = client.GetInto(ctx, starr.Request{URI: "/health"}, &health)
+				_ = client.GetInto(probeCtx, starr.Request{URI: "/health"}, &health)
 			}
 		case "readarr":
 			client, err := s.clients.GetOrCreateReadarrClient(instance.Name, instance.URL, instance.APIKey)
 			if err == nil {
-				_ = client.GetInto(ctx, starr.Request{URI: "/health"}, &health)
+				_ = client.GetInto(probeCtx, starr.Request{URI: "/health"}, &health)
 			}
 		case "whisparr":
 			client, err := s.clients.GetOrCreateWhisparrClient(instance.Name, instance.URL, instance.APIKey)
 			if err == nil {
-				_ = client.GetInto(ctx, starr.Request{URI: "/health"}, &health)
+				_ = client.GetInto(probeCtx, starr.Request{URI: "/health"}, &health)
 			}
 		case "sportarr":
 			// Sportarr is not starr-compatible; report reachability via its native
 			// status endpoint rather than a starr /health call.
 			client, err := s.clients.GetOrCreateSportarrClient(instance.Name, instance.URL, instance.APIKey)
 			if err == nil {
-				if hErr := client.Health(ctx); hErr == nil {
+				if hErr := client.Health(probeCtx); hErr == nil {
 					health = []any{} // healthy: no issues reported
 				}
 			}
 		}
+		cancel()
 		if health != nil {
 			results[instance.Name] = health
 		}
