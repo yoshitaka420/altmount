@@ -295,55 +295,62 @@ func (s *Service) GetHealth(ctx context.Context) (map[string]any, error) {
 		if !instance.Enabled {
 			continue
 		}
-
-		var health any
-
-		// A health probe must fail fast: the shared arr client allows a long ceiling
-		// for bulk list fetches, so bound each reachability check independently to
-		// keep one unreachable instance from stalling the whole sweep.
-		probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-
-		switch instance.Type {
-		case "radarr":
-			client, err := s.clients.GetOrCreateRadarrClient(instance.Name, instance.URL, instance.APIKey)
-			if err == nil {
-				_ = client.GetInto(probeCtx, starr.Request{URI: "/health"}, &health)
-			}
-		case "sonarr":
-			client, err := s.clients.GetOrCreateSonarrClient(instance.Name, instance.URL, instance.APIKey)
-			if err == nil {
-				_ = client.GetInto(probeCtx, starr.Request{URI: "/health"}, &health)
-			}
-		case "lidarr":
-			client, err := s.clients.GetOrCreateLidarrClient(instance.Name, instance.URL, instance.APIKey)
-			if err == nil {
-				_ = client.GetInto(probeCtx, starr.Request{URI: "/health"}, &health)
-			}
-		case "readarr":
-			client, err := s.clients.GetOrCreateReadarrClient(instance.Name, instance.URL, instance.APIKey)
-			if err == nil {
-				_ = client.GetInto(probeCtx, starr.Request{URI: "/health"}, &health)
-			}
-		case "whisparr":
-			client, err := s.clients.GetOrCreateWhisparrClient(instance.Name, instance.URL, instance.APIKey)
-			if err == nil {
-				_ = client.GetInto(probeCtx, starr.Request{URI: "/health"}, &health)
-			}
-		case "sportarr":
-			// Sportarr is not starr-compatible; report reachability via its native
-			// status endpoint rather than a starr /health call.
-			client, err := s.clients.GetOrCreateSportarrClient(instance.Name, instance.URL, instance.APIKey)
-			if err == nil {
-				if hErr := client.Health(probeCtx); hErr == nil {
-					health = []any{} // healthy: no issues reported
-				}
-			}
-		}
-		cancel()
-		if health != nil {
+		if health := s.probeInstanceHealth(ctx, instance); health != nil {
 			results[instance.Name] = health
 		}
 	}
 
 	return results, nil
+}
+
+// probeInstanceHealth performs a single reachability/health check against one arr
+// instance, returning its health payload (nil if unreachable or unhealthy). The
+// probe gets its own short deadline so the shared client's long ceiling (used for
+// bulk list fetches) can't stall the health sweep, and `defer cancel()` releases
+// the context per instance even on a panic or future early return. It lives in its
+// own function rather than the caller's loop precisely so the defer fires each
+// iteration — a bare defer inside the loop would stack every cancel until GetHealth
+// returns.
+func (s *Service) probeInstanceHealth(ctx context.Context, instance *model.ConfigInstance) any {
+	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	var health any
+	switch instance.Type {
+	case "radarr":
+		client, err := s.clients.GetOrCreateRadarrClient(instance.Name, instance.URL, instance.APIKey)
+		if err == nil {
+			_ = client.GetInto(probeCtx, starr.Request{URI: "/health"}, &health)
+		}
+	case "sonarr":
+		client, err := s.clients.GetOrCreateSonarrClient(instance.Name, instance.URL, instance.APIKey)
+		if err == nil {
+			_ = client.GetInto(probeCtx, starr.Request{URI: "/health"}, &health)
+		}
+	case "lidarr":
+		client, err := s.clients.GetOrCreateLidarrClient(instance.Name, instance.URL, instance.APIKey)
+		if err == nil {
+			_ = client.GetInto(probeCtx, starr.Request{URI: "/health"}, &health)
+		}
+	case "readarr":
+		client, err := s.clients.GetOrCreateReadarrClient(instance.Name, instance.URL, instance.APIKey)
+		if err == nil {
+			_ = client.GetInto(probeCtx, starr.Request{URI: "/health"}, &health)
+		}
+	case "whisparr":
+		client, err := s.clients.GetOrCreateWhisparrClient(instance.Name, instance.URL, instance.APIKey)
+		if err == nil {
+			_ = client.GetInto(probeCtx, starr.Request{URI: "/health"}, &health)
+		}
+	case "sportarr":
+		// Sportarr is not starr-compatible; report reachability via its native
+		// status endpoint rather than a starr /health call.
+		client, err := s.clients.GetOrCreateSportarrClient(instance.Name, instance.URL, instance.APIKey)
+		if err == nil {
+			if hErr := client.Health(probeCtx); hErr == nil {
+				health = []any{} // healthy: no issues reported
+			}
+		}
+	}
+	return health
 }
