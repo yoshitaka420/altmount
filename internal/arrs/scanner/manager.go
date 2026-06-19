@@ -586,6 +586,12 @@ func (m *Manager) triggerRadarrRescanByPath(ctx context.Context, client *radarr.
 				}
 				targetMovieFileID = movie.MovieFile.ID
 			}
+		} else {
+			// lookupErr == nil but movie == nil: a missing movie normally surfaces as
+			// an error (404), so an empty-but-successful result is unexpected. Log it
+			// to explain the path-based fallback that follows.
+			slog.DebugContext(ctx, "ID-based Radarr movie lookup returned no movie, falling back to path-based matching",
+				"instance", instanceName, "movie_id", metadata.Movie.Id)
 		}
 	}
 
