@@ -555,33 +555,41 @@ func (m *Manager) triggerRadarrRescanByPath(ctx context.Context, client *radarr.
 	var targetMovieFileID int64
 	var err error
 
-	// ID-Based Precision: If we have the exact movie ID and file ID from metadata, use them directly
-	if metadata != nil && metadata.Movie != nil && metadata.MovieFile != nil && metadata.Movie.Id > 0 && metadata.MovieFile.Id > 0 {
-		slog.InfoContext(ctx, "ID-Based Precision: Using metadata IDs for Radarr repair",
-			"movie_id", metadata.Movie.Id,
-			"movie_file_id", metadata.MovieFile.Id)
-
-		movies, err := m.data.GetMovies(ctx, client, instanceName)
-		if err != nil {
-			return fmt.Errorf("failed to get movies from Radarr for ID lookup: %w", err)
-		}
-		for _, movie := range movies {
-			if movie.ID == metadata.Movie.Id {
-				targetMovie = movie
-
-				// Smart Repair Guard: Check if the movie already has a newer/different healthy file
-				if movie.HasFile && movie.MovieFile != nil {
-					if movie.MovieFile.ID != metadata.MovieFile.Id {
-						slog.InfoContext(ctx, "Smart Repair Guard: Movie already has a different healthy file (likely upgraded). Skipping repair.",
-							"movie", movie.Title,
-							"old_file_id", metadata.MovieFile.Id,
-							"new_file_id", movie.MovieFile.ID)
-						return model.ErrEpisodeAlreadySatisfied
-					}
-					targetMovieFileID = movie.MovieFile.ID
-				}
-				break
+	// ID-Based Precision: resolve the exact movie with a targeted lookup instead
+	// of fetching the entire library (which can exceed the HTTP client timeout on
+	// large instances). Prefer the Radarr DB movie ID, then the TMDB ID; only fall
+	// back to a full-list scan below when neither is available.
+	if metadata != nil && metadata.Movie != nil {
+		switch {
+		case metadata.Movie.Id > 0:
+			slog.InfoContext(ctx, "ID-Based Precision: Looking up Radarr movie by ID", "movie_id", metadata.Movie.Id)
+			targetMovie, err = m.data.GetMovieByID(ctx, client, instanceName, metadata.Movie.Id)
+			if err != nil {
+				slog.WarnContext(ctx, "Targeted Radarr movie lookup by ID failed, falling back to path-based guessing",
+					"movie_id", metadata.Movie.Id, "error", err)
+				targetMovie = nil
 			}
+		case metadata.Movie.TmdbId > 0:
+			slog.InfoContext(ctx, "ID-Based Precision: Looking up Radarr movie by TMDB ID", "tmdb_id", metadata.Movie.TmdbId)
+			targetMovie, err = m.data.GetMovieByTMDBID(ctx, client, instanceName, metadata.Movie.TmdbId)
+			if err != nil {
+				slog.WarnContext(ctx, "Targeted Radarr movie lookup by TMDB ID failed, falling back to path-based guessing",
+					"tmdb_id", metadata.Movie.TmdbId, "error", err)
+				targetMovie = nil
+			}
+		}
+
+		if targetMovie != nil && targetMovie.HasFile && targetMovie.MovieFile != nil {
+			// Smart Repair Guard: if the movie already has a different healthy file
+			// than the one we were asked to repair, it was likely upgraded; skip.
+			if metadata.MovieFile != nil && metadata.MovieFile.Id > 0 && targetMovie.MovieFile.ID != metadata.MovieFile.Id {
+				slog.InfoContext(ctx, "Smart Repair Guard: Movie already has a different healthy file (likely upgraded). Skipping repair.",
+					"movie", targetMovie.Title,
+					"old_file_id", metadata.MovieFile.Id,
+					"new_file_id", targetMovie.MovieFile.ID)
+				return model.ErrEpisodeAlreadySatisfied
+			}
+			targetMovieFileID = targetMovie.MovieFile.ID
 		}
 	}
 
