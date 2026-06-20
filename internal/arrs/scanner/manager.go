@@ -883,6 +883,205 @@ func (m *Manager) resolveSonarrOwnership(ctx context.Context, client *sonarr.Son
 	return res, nil
 }
 
+// OwnershipResult is the read-only, arr-type-agnostic ownership outcome used by
+// the corrupted-file triage to decide whether a file is safe to soft-delete.
+//
+// Fail-closed contract: when LookupOK is false, ownership could NOT be
+// determined (no managing instance could be confirmed, an arr type we cannot
+// introspect may own it, or an arr lookup errored/timed out). Callers MUST
+// treat LookupOK==false as "do not delete" — never as "unowned".
+type OwnershipResult struct {
+	// LookupOK is true only when every lookup needed to reach the verdict
+	// succeeded.
+	LookupOK bool
+	// Managed is true when a configured arr manages this path (root-folder
+	// match, or the webhook named the instance). Only meaningful when LookupOK.
+	Managed bool
+	// HasReplacement is true when the managing arr already holds a different
+	// healthy file for the item (upgrade/re-import). Only meaningful when
+	// LookupOK && Managed.
+	HasReplacement bool
+	// InstanceName is the managing instance (for logging), if one was found.
+	InstanceName string
+}
+
+// ResolveOwnership determines, read-only and fail-closed, whether any configured
+// arr owns the given file and whether the owner already holds a replacement. It
+// reuses the same per-type resolvers as repair so triage and repair agree on
+// ownership. Any lookup error yields LookupOK=false (do not delete).
+func (m *Manager) ResolveOwnership(ctx context.Context, filePath, relativePath string, metadataStr *string) OwnershipResult {
+	var metadata *model.WebhookMetadata
+	if metadataStr != nil && *metadataStr != "" {
+		var parsed model.WebhookMetadata
+		if err := json.Unmarshal([]byte(*metadataStr), &parsed); err == nil {
+			metadata = &parsed
+		}
+	}
+
+	allInstances := m.instances.GetAllInstances()
+
+	// 1. If webhook metadata names the managing instance, trust it: the file is
+	//    arr-managed. Assess replacement on that instance directly.
+	if metadata != nil && metadata.InstanceName != "" {
+		for _, inst := range allInstances {
+			if inst == nil || !inst.Enabled || inst.Name != metadata.InstanceName {
+				continue
+			}
+			return m.ownershipForInstance(ctx, inst, filePath, relativePath, metadata)
+		}
+	}
+
+	// 2. Otherwise find the managing instance by root folder, tracking lookup
+	//    errors so an unreachable/unintrospectable arr is never mistaken for
+	//    "unowned".
+	sawError := false
+	for _, inst := range allInstances {
+		if inst == nil || !inst.Enabled {
+			continue
+		}
+		managed, ok := m.instanceManagesPath(ctx, inst, filePath)
+		if !ok {
+			sawError = true
+			continue
+		}
+		if managed {
+			return m.ownershipForInstance(ctx, inst, filePath, relativePath, metadata)
+		}
+	}
+
+	if sawError {
+		// At least one enabled arr could not be queried (error) or cannot be
+		// introspected (e.g. sportarr) — we cannot prove the file is unowned.
+		return OwnershipResult{LookupOK: false}
+	}
+
+	// Every enabled arr was queried successfully and none manages this path.
+	return OwnershipResult{LookupOK: true, Managed: false}
+}
+
+// ownershipForInstance assesses replacement state on a known managing instance,
+// reusing the repair resolvers. A resolver/client error yields LookupOK=false.
+func (m *Manager) ownershipForInstance(ctx context.Context, inst *model.ConfigInstance, filePath, relativePath string, metadata *model.WebhookMetadata) OwnershipResult {
+	res := OwnershipResult{LookupOK: true, Managed: true, InstanceName: inst.Name}
+	switch inst.Type {
+	case "radarr":
+		client, err := m.clients.GetOrCreateRadarrClient(inst.Name, inst.URL, inst.APIKey)
+		if err != nil {
+			return OwnershipResult{LookupOK: false}
+		}
+		r, err := m.resolveRadarrOwnership(ctx, client, filePath, relativePath, inst.Name, metadata)
+		if err != nil {
+			return OwnershipResult{LookupOK: false}
+		}
+		res.HasReplacement = r.hasReplacement
+		return res
+	case "sonarr", "whisparr":
+		var (
+			client *sonarr.Sonarr
+			err    error
+		)
+		if inst.Type == "whisparr" {
+			client, err = m.clients.GetOrCreateWhisparrClient(inst.Name, inst.URL, inst.APIKey)
+		} else {
+			client, err = m.clients.GetOrCreateSonarrClient(inst.Name, inst.URL, inst.APIKey)
+		}
+		if err != nil {
+			return OwnershipResult{LookupOK: false}
+		}
+		r, err := m.resolveSonarrOwnership(ctx, client, filePath, relativePath, inst.Name, metadata)
+		if err != nil {
+			return OwnershipResult{LookupOK: false}
+		}
+		res.HasReplacement = r.hasReplacement
+		return res
+	default:
+		// lidarr/readarr/sportarr: the file is managed but we cannot assess
+		// replacement, so report it as an only-copy (HasReplacement=false). The
+		// triage then leaves it alone.
+		return res
+	}
+}
+
+// instanceManagesPath reports whether an instance's root folders cover filePath.
+// ok=false means the check could not be performed (client/lookup error, or an
+// arr type without a root-folder check such as sportarr); callers must treat
+// that as "unknown", not "not managed", to stay fail-closed.
+func (m *Manager) instanceManagesPath(ctx context.Context, inst *model.ConfigInstance, filePath string) (managed bool, ok bool) {
+	switch inst.Type {
+	case "radarr":
+		client, err := m.clients.GetOrCreateRadarrClient(inst.Name, inst.URL, inst.APIKey)
+		if err != nil {
+			return false, false
+		}
+		folders, err := client.GetRootFoldersContext(ctx)
+		if err != nil {
+			return false, false
+		}
+		for _, f := range folders {
+			if strings.HasPrefix(filePath, f.Path) {
+				return true, true
+			}
+		}
+		return false, true
+	case "sonarr", "whisparr":
+		var (
+			client *sonarr.Sonarr
+			err    error
+		)
+		if inst.Type == "whisparr" {
+			client, err = m.clients.GetOrCreateWhisparrClient(inst.Name, inst.URL, inst.APIKey)
+		} else {
+			client, err = m.clients.GetOrCreateSonarrClient(inst.Name, inst.URL, inst.APIKey)
+		}
+		if err != nil {
+			return false, false
+		}
+		folders, err := client.GetRootFoldersContext(ctx)
+		if err != nil {
+			return false, false
+		}
+		for _, f := range folders {
+			if strings.HasPrefix(filePath, f.Path) {
+				return true, true
+			}
+		}
+		return false, true
+	case "lidarr":
+		client, err := m.clients.GetOrCreateLidarrClient(inst.Name, inst.URL, inst.APIKey)
+		if err != nil {
+			return false, false
+		}
+		folders, err := client.GetRootFoldersContext(ctx)
+		if err != nil {
+			return false, false
+		}
+		for _, f := range folders {
+			if strings.HasPrefix(filePath, f.Path) {
+				return true, true
+			}
+		}
+		return false, true
+	case "readarr":
+		client, err := m.clients.GetOrCreateReadarrClient(inst.Name, inst.URL, inst.APIKey)
+		if err != nil {
+			return false, false
+		}
+		folders, err := client.GetRootFoldersContext(ctx)
+		if err != nil {
+			return false, false
+		}
+		for _, f := range folders {
+			if strings.HasPrefix(filePath, f.Path) {
+				return true, true
+			}
+		}
+		return false, true
+	default:
+		// sportarr or unknown: no root-folder introspection available.
+		return false, false
+	}
+}
+
 // triggerRadarrRescanByPath triggers a rescan in Radarr for the given file path
 func (m *Manager) triggerRadarrRescanByPath(ctx context.Context, client *radarr.Radarr, filePath, relativePath, instanceName string, metadata *model.WebhookMetadata) error {
 	slog.InfoContext(ctx, "Searching Radarr for matching movie",

@@ -248,6 +248,13 @@ func (s *Service) DiscoverFileMetadata(ctx context.Context, filePath, relativePa
 	return s.scanner.DiscoverFileMetadata(ctx, filePath, relativePath, nzbName, libraryPath)
 }
 
+// ResolveOwnership determines, read-only and fail-closed, whether a configured
+// arr owns the given file and whether the owner already holds a replacement.
+// Used by the corrupted-file triage to decide if a file is safe to soft-delete.
+func (s *Service) ResolveOwnership(ctx context.Context, filePath, relativePath string, metadataStr *string) scanner.OwnershipResult {
+	return s.scanner.ResolveOwnership(ctx, filePath, relativePath, metadataStr)
+}
+
 // TriggerScanForFile finds the ARR instance managing the file and triggers a download scan on it.
 func (s *Service) TriggerScanForFile(ctx context.Context, filePath string) error {
 	return s.scanner.TriggerScanForFile(ctx, filePath)
