@@ -47,12 +47,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// 1. Load and validate configuration
 	cfg, err := config.LoadConfig(cmd.Context(), configFile)
 	if err != nil {
-		slog.Error("failed to load config", "err", err)
+		slog.ErrorContext(cmd.Context(), "failed to load config", "err", err)
 		return err
 	}
 
 	if err := cfg.ValidateDirectories(); err != nil {
-		slog.Error("directory validation failed", "err", err)
+		slog.ErrorContext(cmd.Context(), "directory validation failed", "err", err)
 		return err
 	}
 

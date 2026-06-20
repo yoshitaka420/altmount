@@ -45,13 +45,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	url := fmt.Sprintf("http://localhost:%d%s/health/library-sync/%s", port, prefix, endpoint)
 
-	slog.Info("Triggering library scan", "url", url, "dry_run", dryRun)
+	slog.InfoContext(cmd.Context(), "Triggering library scan", "url", url, "dry_run", dryRun)
 
 	// Create client with timeout
 	client := httpclient.NewDefault()
 
 	// Create request
-	req, err := http.NewRequest("POST", url, nil)
+	req, err := http.NewRequestWithContext(cmd.Context(), "POST", url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}

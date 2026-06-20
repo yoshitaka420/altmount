@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"os"
 
@@ -36,7 +35,7 @@ func runPasswd(cmd *cobra.Command, args []string) error {
 	}
 
 	// 2. Initialize database connection
-	ctx := context.Background()
+	ctx := cmd.Context()
 	// initializeDatabase is internal to cmd package (defined in setup.go)
 	db, err := initializeDatabase(ctx, cfg)
 	if err != nil {
