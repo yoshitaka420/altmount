@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"log/slog"
@@ -1897,9 +1898,9 @@ func LoadConfig(configFile string) (*Config, error) {
 	// existing block. Failure is non-fatal.
 	if used := viper.ConfigFileUsed(); used != "" {
 		if injected, err := ensureCorruptedTriageBlock(used); err != nil {
-			slog.Warn("Failed to surface health.corrupted_triage in config file (continuing)", "path", used, "error", err)
+			slog.WarnContext(context.Background(), "Failed to surface health.corrupted_triage in config file (continuing)", "path", used, "error", err)
 		} else if injected {
-			slog.Info("Added health.corrupted_triage block to config (disabled by default) — review to enable", "path", used)
+			slog.InfoContext(context.Background(), "Added health.corrupted_triage block to config (disabled by default) — review to enable", "path", used)
 		}
 	}
 

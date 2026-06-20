@@ -66,19 +66,35 @@ func injectCorruptedTriage(content string) (string, bool) {
 
 	// Find the top-level `health:` key (no leading whitespace).
 	healthIdx := -1
+	healthInline := false
 	for i, ln := range lines {
 		if ln == "" || ln[0] == ' ' || ln[0] == '\t' {
 			continue
 		}
 		trimmed := strings.TrimRight(ln, " \t\r")
 		parts := strings.SplitN(trimmed, ":", 2)
-		// Match only a real mapping header `health:` (nothing but whitespace
-		// after the colon) — not a scalar like `health: true`. Trimming the key
-		// also tolerates `health :` (space before the colon).
-		if strings.TrimSpace(parts[0]) == "health" && len(parts) == 2 && strings.TrimSpace(parts[1]) == "" {
-			healthIdx = i
-			break
+		if strings.TrimSpace(parts[0]) != "health" || len(parts) != 2 {
+			continue
 		}
+		// Found the top-level `health` key. A block mapping header has nothing but
+		// whitespace (or a trailing comment) after the colon, with children on the
+		// following indented lines — we can splice into that. Inline forms — a flow
+		// mapping (`health: { ... }`) or a scalar (`health: true`) — cannot take
+		// block children, so we must not touch them (doing so would yield invalid
+		// YAML or a duplicate `health` key).
+		after := strings.TrimSpace(parts[1])
+		if after == "" || strings.HasPrefix(after, "#") {
+			healthIdx = i
+		} else {
+			healthInline = true
+		}
+		break
+	}
+
+	// Inline health value: leave the file unchanged rather than appending a
+	// duplicate block or corrupting the inline mapping.
+	if healthInline {
+		return content, false
 	}
 
 	childIndent := "  "

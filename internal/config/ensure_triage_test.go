@@ -169,6 +169,34 @@ func TestEnsureTriage_SkipsScalarHealth(t *testing.T) {
 	assert.Equal(t, string(before), string(after), "scalar-health file must be left untouched")
 }
 
+// `health:` with only a trailing comment (no children) parses as null, not a
+// mapping, so it is left untouched.
+func TestEnsureTriage_SkipsHealthWithComment(t *testing.T) {
+	src := "health: # comment\nmount_path: '/mnt/x'\n"
+	path := writeTempConfig(t, src)
+	before, _ := os.ReadFile(path)
+
+	injected, err := ensureCorruptedTriageBlock(path)
+	require.NoError(t, err)
+	assert.False(t, injected, "must not inject under a commented/null health")
+	after, _ := os.ReadFile(path)
+	assert.Equal(t, string(before), string(after))
+}
+
+// An inline flow mapping (`health: { ... }`) cannot take block children, so the
+// file is left untouched rather than getting a duplicate health block appended.
+func TestEnsureTriage_SkipsHealthWithFlowMapping(t *testing.T) {
+	src := "health: { enabled: true }\nmount_path: '/mnt/x'\n"
+	path := writeTempConfig(t, src)
+	before, _ := os.ReadFile(path)
+
+	injected, err := ensureCorruptedTriageBlock(path)
+	require.NoError(t, err)
+	assert.False(t, injected, "must not inject under an inline flow mapping")
+	after, _ := os.ReadFile(path)
+	assert.Equal(t, string(before), string(after))
+}
+
 // A file we cannot parse is never rewritten.
 func TestEnsureTriage_SkipsUnparseableFile(t *testing.T) {
 	src := "this: : : not valid yaml\n  - broken\n"
