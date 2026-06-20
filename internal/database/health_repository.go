@@ -180,6 +180,11 @@ func (r *HealthRepository) GetFileHealthByID(ctx context.Context, id int64) (*Fi
 // GetFilesByStatus returns up to limit file_health records in the given status,
 // oldest-checked first. Used by the corrupted-file triage to enumerate candidates.
 func (r *HealthRepository) GetFilesByStatus(ctx context.Context, status HealthStatus, limit int) ([]*FileHealth, error) {
+	if limit <= 0 {
+		// Guard against an unbounded scan: some SQL dialects (e.g. SQLite) treat
+		// LIMIT -1 as "no limit".
+		return nil, fmt.Errorf("GetFilesByStatus: limit must be greater than zero, got %d", limit)
+	}
 	rows, err := r.db.QueryContext(ctx,
 		fileHealthSelectColumns+"WHERE status = ? ORDER BY last_checked ASC LIMIT ?",
 		string(status), limit)
