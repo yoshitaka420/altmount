@@ -681,10 +681,7 @@ func (s *Server) handleArrsWebhook(c *fiber.Ctx) error {
 	// blocks the webhook response, and is a no-op unless triage is enabled.
 	s.handoffToTriage(pathsToScan, normalize)
 
-	return c.Status(200).JSON(fiber.Map{
-		"success": true,
-		"message": "Webhook processed",
-	})
+	return RespondMessage(c, "Webhook processed")
 }
 
 // handoffToTriage hands the webhook's affected paths to corrupted-file triage.

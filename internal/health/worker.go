@@ -236,14 +236,23 @@ func (hw *HealthWorker) runTriageBackstop(ctx context.Context) {
 			return
 		case <-timer.C:
 			next := hw.configGetter().GetCorruptedTriageBackstopInterval()
-			if hw.triage != nil && hw.triage.Enabled() {
-				st, err := hw.triage.Sweep(ctx)
-				if err != nil {
-					slog.ErrorContext(ctx, "Corrupted triage backstop sweep failed", "error", err)
-				} else {
-					next = triage.AdaptiveInterval(hw.configGetter().GetCorruptedTriageBackstopInterval(), st)
+			// Isolate each sweep: a panic before triage.Run's per-item recovery
+			// (e.g. in the list query or config access) must not kill the loop.
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.ErrorContext(ctx, "Corrupted triage backstop sweep recovered from panic", "panic", r)
+					}
+				}()
+				if hw.triage != nil && hw.triage.Enabled() {
+					st, err := hw.triage.Sweep(ctx)
+					if err != nil {
+						slog.ErrorContext(ctx, "Corrupted triage backstop sweep failed", "error", err)
+					} else {
+						next = triage.AdaptiveInterval(hw.configGetter().GetCorruptedTriageBackstopInterval(), st)
+					}
 				}
-			}
+			}()
 			timer.Reset(next)
 		}
 	}

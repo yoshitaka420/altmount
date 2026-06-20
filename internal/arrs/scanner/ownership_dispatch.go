@@ -97,42 +97,44 @@ func (m *Manager) resolveSonarrOwnershipStatus(ctx context.Context, client *sona
 		return model.OwnershipUnowned, 0
 	}
 
+	if own.episodeFileID == 0 {
+		// The series matched but no specific file record lined up with our path. The
+		// series still owns the area; treat as Owned (the arr drives repair) rather
+		// than risk deleting a file the arr still expects. No episode fetch needed.
+		return model.OwnershipOwned, 0
+	}
+
+	// Only now is an episode fetch worthwhile: we need it to tell a still-tracked
+	// dead file (Owned) from one already replaced by a different healthy file.
 	episodes, err := client.GetSeriesEpisodesContext(ctx, &sonarr.GetEpisode{SeriesID: own.seriesID})
 	if err != nil {
 		slog.WarnContext(ctx, "Ownership unknown: failed to fetch Sonarr episodes", "instance", instanceName, "error", err)
 		return model.OwnershipUnknown, 0
 	}
 
-	if own.episodeFileID > 0 {
-		// Is the (dead) file we resolved still the current file for an episode?
+	// Is the (dead) file we resolved still the current file for an episode?
+	for _, ep := range episodes {
+		if ep.EpisodeFileID == own.episodeFileID {
+			// The series still references this exact file; a repair will be
+			// driven against it. Keep it.
+			return model.OwnershipOwned, 0
+		}
+	}
+	// The resolved file id is no longer referenced by any episode: it was
+	// removed/upgraded. Look for a replacement at the same season/episode.
+	if season, episode, ok := parseSeasonEpisodeFromPaths(filePath, relativePath); ok {
 		for _, ep := range episodes {
-			if ep.EpisodeFileID == own.episodeFileID {
-				// The series still references this exact file; a repair will be
-				// driven against it. Keep it.
+			if ep.SeasonNumber == season && ep.EpisodeNumber == episode {
+				if ep.HasFile && ep.EpisodeFileID > 0 {
+					return model.OwnershipReplaced, ep.EpisodeFileID
+				}
+				// Episode tracked but currently fileless: the arr will re-grab.
 				return model.OwnershipOwned, 0
 			}
 		}
-		// The resolved file id is no longer referenced by any episode: it was
-		// removed/upgraded. Look for a replacement at the same season/episode.
-		if season, episode, ok := parseSeasonEpisodeFromPaths(filePath, relativePath); ok {
-			for _, ep := range episodes {
-				if ep.SeasonNumber == season && ep.EpisodeNumber == episode {
-					if ep.HasFile && ep.EpisodeFileID > 0 {
-						return model.OwnershipReplaced, ep.EpisodeFileID
-					}
-					// Episode tracked but currently fileless: the arr will re-grab.
-					return model.OwnershipOwned, 0
-				}
-			}
-		}
-		// Stale file id we cannot map to a current episode: ambiguous, fail closed
-		// toward keeping the file.
-		return model.OwnershipOwned, 0
 	}
-
-	// The series matched but no specific file record lined up with our path. The
-	// series still owns the area; treat as Owned (the arr drives repair) rather
-	// than risk deleting a file the arr still expects.
+	// Stale file id we cannot map to a current episode: ambiguous, fail closed
+	// toward keeping the file.
 	return model.OwnershipOwned, 0
 }
 

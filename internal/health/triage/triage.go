@@ -192,7 +192,7 @@ func (s *Service) Run(ctx context.Context, items []*database.FileHealth, source 
 				if r := recover(); r != nil {
 					st.Errors++
 					slog.ErrorContext(ctx, "Corrupted triage recovered from panic",
-						"source", source, "file_path", item.FilePath, "panic", r)
+						"source", source, "file_path", filePathOf(item), "panic", r)
 				}
 			}()
 
@@ -267,18 +267,25 @@ func (s *Service) guard(ctx context.Context, item *database.FileHealth, source S
 	defer func() {
 		if r := recover(); r != nil {
 			slog.ErrorContext(ctx, "Corrupted triage recovered from panic",
-				"source", source, "file_path", item.FilePath, "panic", r)
+				"source", source, "file_path", filePathOf(item), "panic", r)
 		}
 	}()
 	fn()
+}
+
+// filePathOf returns the item's file path, or "" when the item is nil, so panic
+// recovery logging never itself panics on a nil record.
+func filePathOf(item *database.FileHealth) string {
+	if item == nil {
+		return ""
+	}
+	return item.FilePath
 }
 
 // processOne evaluates then applies a delete for a single item (no guards).
 func (s *Service) processOne(ctx context.Context, item *database.FileHealth, source Source) bool {
 	dec := s.Evaluate(ctx, item)
 	if dec.Action == ActionKeep {
-		slog.DebugContext(ctx, "Corrupted triage keeping file",
-			"source", source, "file_path", item.FilePath, "reason", dec.Reason)
 		return false
 	}
 	deleted, _ := s.applyDelete(ctx, item, dec, source)
