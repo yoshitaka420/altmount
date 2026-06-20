@@ -672,6 +672,14 @@ func (s *Server) handleArrsWebhook(c *fiber.Ctx) error {
 		}
 	}
 
+	// Webhook -> triage handoff: an import/upgrade/rename may mean a replacement
+	// landed, so re-evaluate corrupted records that might now be provably safe to
+	// soft-delete. The triage is asynchronous, guarded and self-gates on being
+	// enabled, so this is a cheap no-op when triage is off.
+	if isScanEvent && s.healthWorker != nil {
+		s.healthWorker.TriggerTriage()
+	}
+
 	return c.Status(200).JSON(fiber.Map{
 		"success": true,
 		"message": "Webhook processed",

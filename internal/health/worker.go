@@ -28,6 +28,10 @@ import (
 type ARRsRepairService interface {
 	TriggerFileRescan(ctx context.Context, pathForRescan string, relativePath string, metadataStr *string) error
 	DiscoverFileMetadata(ctx context.Context, filePath, relativePath, nzbName, libraryPath string) (*model.WebhookMetadata, error)
+	// ResolveOwnership returns a read-only, fail-closed ownership verdict for a
+	// file, used by the corrupted-file triage to decide whether it is safe to
+	// soft-delete. Any lookup error must yield LookupOK=false.
+	ResolveOwnership(ctx context.Context, filePath, relativePath string, metadataStr *string) arrs.OwnershipResult
 }
 
 // WorkerStatus represents the current status of the health worker
@@ -66,10 +70,11 @@ type HealthWorker struct {
 	progressBroadcaster *progress.ProgressBroadcaster // optional, may be nil
 
 	// Worker state
-	status       WorkerStatus
-	running      bool
-	cycleRunning bool // Flag to prevent overlapping cycles
-	stopChan     chan struct{}
+	status        WorkerStatus
+	running       bool
+	cycleRunning  bool // Flag to prevent overlapping cycles
+	triageRunning bool // Flag to coalesce concurrent corrupted-file triage passes
+	stopChan      chan struct{}
 	wg           sync.WaitGroup
 	mu           sync.RWMutex
 
@@ -152,6 +157,13 @@ func (hw *HealthWorker) Start(ctx context.Context) error {
 	// Start the main worker goroutine
 	hw.wg.Go(func() {
 		hw.run(ctx)
+	})
+
+	// Start the corrupted-file triage backstop sweep. It self-gates on the
+	// triage being enabled at each tick, so runtime config changes take effect
+	// without a restart.
+	hw.wg.Go(func() {
+		hw.triageBackstopLoop(ctx)
 	})
 
 	hw.status = WorkerStatusRunning
@@ -891,6 +903,13 @@ func (hw *HealthWorker) runHealthCheckCycle(ctx context.Context) error {
 			slog.ErrorContext(ctx, "Failed to perform bulk health status update", "error", err)
 		}
 		hw.broadcastHealthChanged()
+	}
+
+	// Event-driven triage trigger: if any file just entered corrupted, kick a
+	// guarded triage pass so provably-safe records are cleaned promptly instead
+	// of waiting for the backstop sweep. Coalesced via the triageRunning guard.
+	if hw.configGetter().Health.CorruptedTriage.IsEnabled() && countNewlyCorrupted(results) > 0 {
+		go func() { _, _ = hw.runCorruptedTriageSafe(ctx) }()
 	}
 
 	// Update final stats

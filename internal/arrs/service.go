@@ -24,6 +24,10 @@ import (
 type ConfigInstance = model.ConfigInstance
 type ConfigManager = model.ConfigManager
 
+// OwnershipResult is the read-only ownership verdict produced by ResolveOwnership,
+// re-exported so consumers (e.g. the health triage) need not import arrs/scanner.
+type OwnershipResult = scanner.OwnershipResult
+
 var (
 	ErrPathMatchFailed         = model.ErrPathMatchFailed
 	ErrEpisodeAlreadySatisfied = model.ErrEpisodeAlreadySatisfied

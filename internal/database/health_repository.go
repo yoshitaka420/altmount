@@ -177,6 +177,50 @@ func (r *HealthRepository) GetFileHealthByID(ctx context.Context, id int64) (*Fi
 	return health, nil
 }
 
+// GetFilesByStatus returns up to limit file_health records in the given status,
+// oldest-checked first. Used by the corrupted-file triage to enumerate candidates.
+func (r *HealthRepository) GetFilesByStatus(ctx context.Context, status HealthStatus, limit int) ([]*FileHealth, error) {
+	rows, err := r.db.QueryContext(ctx,
+		fileHealthSelectColumns+"WHERE status = ? ORDER BY last_checked ASC LIMIT ?",
+		string(status), limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query files by status: %w", err)
+	}
+	defer rows.Close()
+
+	var files []*FileHealth
+	for rows.Next() {
+		health, err := scanFileHealth(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan file health by status: %w", err)
+		}
+		files = append(files, health)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating file health rows: %w", err)
+	}
+	return files, nil
+}
+
+// DeleteHealthRecordIfStatus deletes a record only if it is still in the expected
+// status, returning whether a row was actually deleted. The corrupted-file triage
+// uses this so a record that was concurrently rescued (e.g. re-imported back to
+// pending) is never clobbered — the atomic conditional delete is the status guard.
+func (r *HealthRepository) DeleteHealthRecordIfStatus(ctx context.Context, filePath string, status HealthStatus) (bool, error) {
+	filePath = normalizeHealthPath(filePath)
+	result, err := r.db.ExecContext(ctx,
+		`DELETE FROM file_health WHERE file_path = ? AND status = ?`,
+		filePath, string(status))
+	if err != nil {
+		return false, fmt.Errorf("failed to conditionally delete health record: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	return n > 0, nil
+}
+
 // IncrementStreamingFailureCount increments the streaming failure count and returns whether masking/repair threshold was reached
 func (r *HealthRepository) IncrementStreamingFailureCount(ctx context.Context, filePath string, threshold int) (bool, bool, error) {
 	filePath = normalizeHealthPath(filePath)

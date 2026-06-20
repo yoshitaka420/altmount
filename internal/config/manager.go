@@ -381,8 +381,58 @@ type HealthConfig struct {
 	VerifyData                          *bool        `yaml:"verify_data" mapstructure:"verify_data" json:"verify_data,omitempty"`
 	CheckAllSegments                    *bool        `yaml:"check_all_segments" mapstructure:"check_all_segments" json:"check_all_segments,omitempty"`
 	ReadTimeoutSeconds                  int          `yaml:"read_timeout_seconds" mapstructure:"read_timeout_seconds" json:"read_timeout_seconds,omitempty"`
-	AcceptableMissingSegmentsPercentage float64      `yaml:"acceptable_missing_segments_percentage" mapstructure:"acceptable_missing_segments_percentage" json:"acceptable_missing_segments_percentage,omitempty"`
-	Repair                              RepairConfig `yaml:"repair" mapstructure:"repair" json:"repair"`
+	AcceptableMissingSegmentsPercentage float64               `yaml:"acceptable_missing_segments_percentage" mapstructure:"acceptable_missing_segments_percentage" json:"acceptable_missing_segments_percentage,omitempty"`
+	Repair                              RepairConfig          `yaml:"repair" mapstructure:"repair" json:"repair"`
+	CorruptedTriage                     CorruptedTriageConfig `yaml:"corrupted_triage" mapstructure:"corrupted_triage" json:"corrupted_triage"`
+}
+
+// CorruptedTriageConfig controls the corrupted-file auto-delete triage: a guarded
+// pass that soft-deletes (health DB row + .meta only, never the library file,
+// never an arr's only copy) corrupted records that are provably safe to remove —
+// dead+unowned, dead+arr-already-has-replacement, and file_removed zombies. It is
+// disabled by default and every guard fails closed.
+type CorruptedTriageConfig struct {
+	// Enabled turns the triage on. Default false (no deletes).
+	Enabled *bool `yaml:"enabled" mapstructure:"enabled" json:"enabled,omitempty"`
+	// MaxDeletesPerRun caps soft-deletes per triage pass. Default 50.
+	MaxDeletesPerRun int `yaml:"max_deletes_per_run" mapstructure:"max_deletes_per_run" json:"max_deletes_per_run,omitempty"`
+	// MassEventThreshold aborts the whole pass when the corrupted-record count
+	// exceeds it: a systemic failure (provider outage, mount flap) that marks
+	// everything corrupted must never trigger mass deletion. Default 500.
+	MassEventThreshold int `yaml:"mass_event_threshold" mapstructure:"mass_event_threshold" json:"mass_event_threshold,omitempty"`
+	// BackstopIntervalMinutes is the base cadence of the adaptive backstop sweep.
+	// Default 60.
+	BackstopIntervalMinutes int `yaml:"backstop_interval_minutes" mapstructure:"backstop_interval_minutes" json:"backstop_interval_minutes,omitempty"`
+}
+
+// IsEnabled reports whether the corrupted-file triage is turned on.
+func (c CorruptedTriageConfig) IsEnabled() bool {
+	return c.Enabled != nil && *c.Enabled
+}
+
+// GetMaxDeletesPerRun returns the per-run soft-delete cap (default 50).
+func (c CorruptedTriageConfig) GetMaxDeletesPerRun() int {
+	if c.MaxDeletesPerRun <= 0 {
+		return 50
+	}
+	return c.MaxDeletesPerRun
+}
+
+// GetMassEventThreshold returns the mass-event abort threshold (default 500).
+func (c CorruptedTriageConfig) GetMassEventThreshold() int {
+	if c.MassEventThreshold <= 0 {
+		return 500
+	}
+	return c.MassEventThreshold
+}
+
+// GetBackstopInterval returns the base backstop sweep interval (default 60m).
+func (c CorruptedTriageConfig) GetBackstopInterval() time.Duration {
+	m := c.BackstopIntervalMinutes
+	if m <= 0 {
+		m = 60
+	}
+	return time.Duration(m) * time.Minute
 }
 
 // Path validation functions have been moved to internal/utils/path.go

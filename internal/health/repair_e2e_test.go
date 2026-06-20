@@ -56,6 +56,8 @@ type mockARRsService struct {
 	mu        sync.Mutex
 	calls     []triggerCall
 	returnErr error
+	// ownership, when set, drives ResolveOwnership keyed on the path passed in.
+	ownership func(filePath string) arrs.OwnershipResult
 }
 
 type triggerCall struct {
@@ -72,6 +74,14 @@ func (m *mockARRsService) TriggerFileRescan(_ context.Context, pathForRescan str
 
 func (m *mockARRsService) DiscoverFileMetadata(_ context.Context, _, _, _, _ string) (*model.WebhookMetadata, error) {
 	return nil, nil
+}
+
+func (m *mockARRsService) ResolveOwnership(_ context.Context, filePath, _ string, _ *string) arrs.OwnershipResult {
+	if m.ownership != nil {
+		return m.ownership(filePath)
+	}
+	// Default: ownership undetermined -> fail closed (no triage deletes in repair tests).
+	return arrs.OwnershipResult{LookupOK: false}
 }
 
 // mockImportService implements importer.ImportService for testing.
@@ -91,6 +101,7 @@ type repairTestEnv struct {
 	healthChecker   *HealthChecker
 	mockARRs        *mockARRsService
 	hw              *HealthWorker
+	cfg             *config.Config // live config pointer (mutations are visible via GetConfig)
 }
 
 func newRepairTestEnv(t *testing.T, tempDir string, arrsErr error) *repairTestEnv {
@@ -177,6 +188,7 @@ func newRepairTestEnv(t *testing.T, tempDir string, arrsErr error) *repairTestEn
 		healthChecker:   healthChecker,
 		mockARRs:        mockARRs,
 		hw:              hw,
+		cfg:             cfg,
 	}
 }
 
