@@ -1891,6 +1891,18 @@ func LoadConfig(configFile string) (*Config, error) {
 	// Migrate: fold legacy stuck/allowlist cleanup config into the unified rules.
 	migrateArrsCleanup(config)
 
+	// First-run surfacing: if the live config file predates the corrupted-file
+	// triage and lacks its block, inject it (disabled, with comments) so the
+	// option is visible and editable. Non-destructive; never modifies an
+	// existing block. Failure is non-fatal.
+	if used := viper.ConfigFileUsed(); used != "" {
+		if injected, err := ensureCorruptedTriageBlock(used); err != nil {
+			slog.Warn("Failed to surface health.corrupted_triage in config file (continuing)", "path", used, "error", err)
+		} else if injected {
+			slog.Info("Added health.corrupted_triage block to config (disabled by default) — review to enable", "path", used)
+		}
+	}
+
 	// If log file was not explicitly set in the config file and we have a specific config file path,
 	// derive log file path from config file location
 	if configFile != "" && !viper.IsSet("log.file") {
