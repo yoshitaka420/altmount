@@ -561,26 +561,28 @@ func (m *Manager) triggerRadarrRescanByPath(ctx context.Context, client *radarr.
 			"movie_id", metadata.Movie.Id,
 			"movie_file_id", metadata.MovieFile.Id)
 
-		movies, err := m.data.GetMovies(ctx, client, instanceName)
-		if err != nil {
-			return fmt.Errorf("failed to get movies from Radarr for ID lookup: %w", err)
-		}
-		for _, movie := range movies {
-			if movie.ID == metadata.Movie.Id {
-				targetMovie = movie
+		// Targeted lookup by internal id (GET /api/v3/movie/{id}) instead of
+		// fetching the entire library and scanning in memory: on large libraries
+		// the full movie list can exceed the HTTP client timeout. A stale id
+		// (movie removed+re-added gets a new internal id) returns an error here;
+		// fall through to the path-based fallback rather than failing the repair.
+		movie, lookupErr := client.GetMovieByIDContext(ctx, metadata.Movie.Id)
+		if lookupErr != nil {
+			slog.DebugContext(ctx, "Targeted Radarr movie lookup by id failed, falling back",
+				"movie_id", metadata.Movie.Id, "error", lookupErr)
+		} else if movie != nil {
+			targetMovie = movie
 
-				// Smart Repair Guard: Check if the movie already has a newer/different healthy file
-				if movie.HasFile && movie.MovieFile != nil {
-					if movie.MovieFile.ID != metadata.MovieFile.Id {
-						slog.InfoContext(ctx, "Smart Repair Guard: Movie already has a different healthy file (likely upgraded). Skipping repair.",
-							"movie", movie.Title,
-							"old_file_id", metadata.MovieFile.Id,
-							"new_file_id", movie.MovieFile.ID)
-						return model.ErrEpisodeAlreadySatisfied
-					}
-					targetMovieFileID = movie.MovieFile.ID
+			// Smart Repair Guard: Check if the movie already has a newer/different healthy file
+			if movie.HasFile && movie.MovieFile != nil {
+				if movie.MovieFile.ID != metadata.MovieFile.Id {
+					slog.InfoContext(ctx, "Smart Repair Guard: Movie already has a different healthy file (likely upgraded). Skipping repair.",
+						"movie", movie.Title,
+						"old_file_id", metadata.MovieFile.Id,
+						"new_file_id", movie.MovieFile.ID)
+					return model.ErrEpisodeAlreadySatisfied
 				}
-				break
+				targetMovieFileID = movie.MovieFile.ID
 			}
 		}
 	}
