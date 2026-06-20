@@ -61,6 +61,13 @@ func TestParseSonarrSeasonEpisode(t *testing.T) {
 			wantOK: false,
 		},
 		{
+			name:        "dashed resolution suffix is single episode",
+			path:        "Show.S01E01-1080p.WEB.mkv",
+			wantSeason:  1,
+			wantEpisode: 1,
+			wantOK:      true,
+		},
+		{
 			name:   "daily date-based left unmatched",
 			path:   "Show.2023.05.18.1080p.mkv",
 			wantOK: false,
