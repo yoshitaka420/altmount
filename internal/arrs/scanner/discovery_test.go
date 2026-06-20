@@ -87,6 +87,9 @@ func TestPathUnderRoot(t *testing.T) {
 		{`C:\Media\Movie\x.mkv`, `C:\Media`, true},        // windows separator
 		{`C:\Media2\x.mkv`, `C:\Media`, false},            // windows sibling prefix
 		{"/a/b", "", false},                              // empty folder never matches
+		{"/data/x.mkv", "/", true},                       // posix root manages everything
+		{"/data/x.mkv", "//", true},                      // pure separators = root
+		{`C:\x.mkv`, `\`, true},                          // windows root
 	}
 	for _, c := range cases {
 		if got := pathUnderRoot(c.filePath, c.folder); got != c.want {

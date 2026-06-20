@@ -871,7 +871,10 @@ func (m *Manager) resolveSonarrOwnership(ctx context.Context, client *sonarr.Son
 			episodeFiles, err := m.data.GetEpisodeFiles(ctx, client, instanceName, res.seriesID)
 			if err == nil {
 				for _, ef := range episodeFiles {
-					if ef.Path == filePath || (metadata != nil && metadata.EpisodeFile != nil && ef.SceneName == metadata.EpisodeFile.SceneName) {
+					// A replacement must be a DIFFERENT file from the stale one, and a
+					// scene-name match only counts when the stored scene name is
+					// non-empty ("" == "" is not a real match).
+					if ef.ID != res.episodeFileID && (ef.Path == filePath || (metadata != nil && metadata.EpisodeFile != nil && metadata.EpisodeFile.SceneName != "" && ef.SceneName == metadata.EpisodeFile.SceneName)) {
 						slog.InfoContext(ctx, "Smart Repair Guard: Episode already has a different healthy file (likely upgraded). Skipping repair.",
 							"old_file_id", res.episodeFileID,
 							"new_file_id", ef.ID)
@@ -1016,10 +1019,13 @@ func (m *Manager) ownershipForInstance(ctx context.Context, inst *model.ConfigIn
 // /root/media2 is not mistaken for being under /root/media. It tolerates either
 // path separator so it works for both Linux and Windows arr paths.
 func pathUnderRoot(filePath, folder string) bool {
-	folder = strings.TrimRight(folder, `/\`)
-	if folder == "" {
-		return false
+	trimmed := strings.TrimRight(folder, `/\`)
+	if trimmed == "" {
+		// An empty folder never matches; a pure-separator root ("/" or `\`)
+		// covers every absolute path beneath the filesystem root.
+		return folder != ""
 	}
+	folder = trimmed
 	if filePath == folder {
 		return true
 	}

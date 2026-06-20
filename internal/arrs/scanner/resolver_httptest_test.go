@@ -145,6 +145,36 @@ func TestResolveSonarrOwnership_SeasonEpisodeFallback(t *testing.T) {
 	assert.Contains(t, res.episodeIDs, int64(300))
 }
 
+// TestResolveSonarrOwnership_EmptySceneNotReplacement verifies the Smart Repair
+// Guard does NOT treat an empty stored scene name matching another empty scene
+// name as a "replacement" (which would wrongly skip repair).
+func TestResolveSonarrOwnership_EmptySceneNotReplacement(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v3/episode", func(w http.ResponseWriter, _ *http.Request) {
+		// No episode links the stale file id 88 → Smart Repair Guard fires.
+		writeJSON(w, []map[string]any{
+			{"id": 300, "seasonNumber": 1, "episodeNumber": 1, "hasFile": false, "episodeFileId": 0},
+		})
+	})
+	mux.HandleFunc("/api/v3/episodeFile", func(w http.ResponseWriter, _ *http.Request) {
+		// A different file with an EMPTY scene name and a non-matching path.
+		writeJSON(w, []map[string]any{{"id": 99, "path": "/tv/Show/other.mkv", "sceneName": ""}})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	m := newResolverManager()
+	// id-precision: stale episode-file id 88, empty scene name in metadata.
+	meta := &model.WebhookMetadata{
+		Series:      &model.SeriesMetadata{Id: 10},
+		EpisodeFile: &model.EpisodeFileMetadata{Id: 88, SceneName: ""},
+	}
+	res, err := m.resolveSonarrOwnership(context.Background(), newTestSonarr(srv),
+		"/tv/Show/Season 01/ep.mkv", "", "sonarr-1", meta)
+	require.NoError(t, err)
+	assert.False(t, res.hasReplacement, "empty scene name must not count as a replacement")
+}
+
 // TestResolveSonarrOwnership_NilEpisodeFileGuard exercises the Smart Repair Guard
 // path with metadata present but EpisodeFile nil — it must not panic.
 func TestResolveSonarrOwnership_NilEpisodeFileGuard(t *testing.T) {
