@@ -1849,7 +1849,7 @@ func LoadConfig(ctx context.Context, configFile string) (*Config, error) {
 			}
 
 			// Log that we created a default config
-			slog.Info("Created default configuration file — please review and modify as needed", "path", targetConfigFile)
+			slog.InfoContext(ctx, "Created default configuration file — please review and modify as needed", "path", targetConfigFile)
 
 			// Now try to read the newly created file
 			viper.SetConfigFile(targetConfigFile)
@@ -1928,7 +1928,7 @@ func LoadConfig(ctx context.Context, configFile string) (*Config, error) {
 			return nil, fmt.Errorf("invalid PORT environment variable %d: must be between 1 and 65535", port)
 		}
 		config.WebDAV.Port = port
-		slog.Info("Using PORT from environment variable", "port", port)
+		slog.InfoContext(ctx, "Using PORT from environment variable", "port", port)
 	}
 
 	// Validate configuration
