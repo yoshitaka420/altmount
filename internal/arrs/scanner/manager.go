@@ -725,7 +725,7 @@ func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.
 			episodeFiles, err := m.data.GetEpisodeFiles(ctx, client, instanceName, targetSeriesID)
 			if err == nil {
 				for _, ef := range episodeFiles {
-					if ef.Path == filePath || (metadata != nil && ef.SceneName == metadata.EpisodeFile.SceneName) {
+					if ef.Path == filePath || (metadata != nil && metadata.EpisodeFile != nil && ef.SceneName == metadata.EpisodeFile.SceneName) {
 						slog.InfoContext(ctx, "Smart Repair Guard: Episode already has a different healthy file (likely upgraded). Skipping repair.",
 							"old_file_id", targetEpisodeFileID,
 							"new_file_id", ef.ID)

@@ -221,7 +221,7 @@ func (m *Manager) resolveSonarrOwnership(ctx context.Context, client *sonarr.Son
 
 	var targetSeries *sonarr.Series
 	for _, show := range series {
-		if strings.Contains(filePath, show.Path) {
+		if pathContainsDir(filePath, show.Path) {
 			targetSeries = show
 			break
 		}
@@ -230,7 +230,7 @@ func (m *Manager) resolveSonarrOwnership(ctx context.Context, client *sonarr.Son
 	if targetSeries == nil {
 		for _, show := range series {
 			showFolderName := filepath.Base(show.Path)
-			if strings.Contains(relativePath, showFolderName) {
+			if hasPathComponent(relativePath, showFolderName) {
 				slog.InfoContext(ctx, "Found series match by folder name", "series", show.Title, "folder", showFolderName)
 				targetSeries = show
 				break
@@ -295,4 +295,43 @@ func (m *Manager) resolveSonarrOwnership(ctx context.Context, client *sonarr.Son
 	}
 
 	return own, nil
+}
+
+// pathContainsDir reports whether dir occurs in p terminated at a path-component
+// boundary (the next character is a separator or end of string). This keeps the
+// original lenient "appears anywhere" behavior across differing path prefixes
+// while preventing a sibling directory from matching by raw substring (e.g.
+// "/tv/Show" must not match "/tv/Showtime/...").
+func pathContainsDir(p, dir string) bool {
+	if dir == "" {
+		return false
+	}
+	p = filepath.ToSlash(p)
+	dir = filepath.ToSlash(dir)
+	for i := 0; ; {
+		idx := strings.Index(p[i:], dir)
+		if idx < 0 {
+			return false
+		}
+		end := i + idx + len(dir)
+		if end == len(p) || p[end] == '/' {
+			return true
+		}
+		i = i + idx + 1
+	}
+}
+
+// hasPathComponent reports whether comp appears as a whole, slash-delimited path
+// component of p, so a folder name like "Show" matches "Show/..." but not
+// "Showtime/..." or "My Show Extra/...".
+func hasPathComponent(p, comp string) bool {
+	if comp == "" {
+		return false
+	}
+	for _, part := range strings.Split(filepath.ToSlash(p), "/") {
+		if part == comp {
+			return true
+		}
+	}
+	return false
 }
