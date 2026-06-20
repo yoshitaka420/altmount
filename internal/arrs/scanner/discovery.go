@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/javi11/altmount/internal/arrs/model"
@@ -14,7 +15,38 @@ import (
 var (
 	tvSeasonPattern = regexp.MustCompile(`(?i)S\d{1,4}E\d{1,4}`)
 	tvDatePattern   = regexp.MustCompile(`(?i)\d{4}.\d{2}.\d{2}`)
+
+	// tvSeasonEpisodePattern is the capture-group counterpart to tvSeasonPattern:
+	// it extracts the season and episode numbers from a standard SxxExx token.
+	tvSeasonEpisodePattern = regexp.MustCompile(`(?i)S(\d{1,4})E(\d{1,4})`)
+
+	// multiEpisodePattern detects multi-episode files (e.g. S01E01E02,
+	// S01E01-E02, S01E01-02) whose stable identity is ambiguous. These are left
+	// to path/file-id matching rather than guessed at by season+episode.
+	multiEpisodePattern = regexp.MustCompile(`(?i)S\d{1,4}E\d{1,4}(?:-?E\d{1,4}|-\d{1,4})`)
 )
+
+// parseSeasonEpisode extracts a single, unambiguous season+episode identity from
+// a path or filename. It returns ok=false for inputs that cannot be matched to
+// exactly one SxxExx token: dailies (date-based names), anime absolute
+// numbering (no SxxExx), and multi-episode files. These are intentionally not
+// guessed at by the season+episode repair fallback.
+func parseSeasonEpisode(s string) (season, episode int, ok bool) {
+	if multiEpisodePattern.MatchString(s) {
+		return 0, 0, false
+	}
+	matches := tvSeasonEpisodePattern.FindAllStringSubmatch(s, -1)
+	if len(matches) != 1 {
+		// No SxxExx token, or multiple distinct tokens (ambiguous).
+		return 0, 0, false
+	}
+	season, err1 := strconv.Atoi(matches[0][1])
+	episode, err2 := strconv.Atoi(matches[0][2])
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return season, episode, true
+}
 
 // DiscoverFileMetadata attempts to find the rich metadata for a file by searching ARR instances.
 // This implementation is 100% STRICT and performs zero fuzzy guessing.

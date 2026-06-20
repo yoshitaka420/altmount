@@ -881,6 +881,30 @@ func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.
 		return fmt.Errorf("failed to get episodes for series %s: %w", targetSeriesTitle, err)
 	}
 
+	// Class-2 path-match fallback: when the mutable episode-file id and the
+	// path/filename both failed to resolve the file, fall back to the stable
+	// season+episode identity parsed from the path. The internal EpisodeFile.Id
+	// changes on re-import and the path changes on rename, but season+episode is
+	// stable, so this recovers a dead episode the arr still owns (HasFile).
+	// Ambiguous inputs (dailies, anime absolute numbering, multi-episode files)
+	// return ok=false from parseSeasonEpisode and are left as corrupted.
+	if targetEpisodeFileID == 0 {
+		if season, epNum, ok := parseSeasonEpisode(filePath); ok {
+			for _, episode := range episodes {
+				if episode.SeasonNumber == season && episode.EpisodeNumber == epNum &&
+					episode.HasFile && episode.EpisodeFileID > 0 {
+					slog.InfoContext(ctx, "Found Sonarr episode by stable season+episode after id/path match failed",
+						"series", targetSeriesTitle,
+						"season", season,
+						"episode", epNum,
+						"episode_file_id", episode.EpisodeFileID)
+					targetEpisodeFileID = episode.EpisodeFileID
+					break
+				}
+			}
+		}
+	}
+
 	if targetEpisodeFileID > 0 {
 		// Found the file record - get episodes linked to it
 		for _, episode := range episodes {
