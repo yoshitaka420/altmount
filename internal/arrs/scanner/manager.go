@@ -645,6 +645,31 @@ func (m *Manager) triggerRadarrRescanByPath(ctx context.Context, client *radarr.
 		}
 	}
 
+	// Stable-id fallback: when both the internal id and the path failed to
+	// resolve the movie, retry with the immutable tmdbId. The internal Movie.Id
+	// changes when a movie is removed and re-added in Radarr, but the tmdbId is
+	// stable, so this recovers a movie the arr still owns. Targeted
+	// GET /api/v3/movie?tmdbId= avoids fetching the whole library.
+	if targetMovie == nil && metadata != nil && metadata.Movie != nil && metadata.Movie.TmdbId > 0 {
+		slog.InfoContext(ctx, "Resolving Radarr movie by stable tmdbId after id/path match failed",
+			"tmdb_id", metadata.Movie.TmdbId)
+		movies, lookupErr := client.GetMovieContext(ctx, &radarr.GetMovie{TMDBID: metadata.Movie.TmdbId})
+		if lookupErr != nil {
+			slog.DebugContext(ctx, "Targeted Radarr movie lookup by tmdbId failed, falling back",
+				"tmdb_id", metadata.Movie.TmdbId, "error", lookupErr)
+		} else {
+			for _, movie := range movies {
+				if movie.TmdbID == metadata.Movie.TmdbId {
+					targetMovie = movie
+					if movie.HasFile && movie.MovieFile != nil {
+						targetMovieFileID = movie.MovieFile.ID
+					}
+					break
+				}
+			}
+		}
+	}
+
 	if targetMovie == nil {
 		slog.WarnContext(ctx, "No movie found with matching file path or ID in Radarr library, attempting queue-based failure",
 			"instance", instanceName,
