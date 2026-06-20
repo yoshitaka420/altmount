@@ -34,6 +34,7 @@ func ensureCorruptedTriageBlock(path string) (bool, error) {
 	if err := yaml.Unmarshal(raw, &root); err != nil {
 		return false, nil
 	}
+	healthExists := false
 	if hv, exists := root["health"]; exists {
 		h, ok := hv.(map[string]any)
 		if !ok {
@@ -42,12 +43,13 @@ func ensureCorruptedTriageBlock(path string) (bool, error) {
 			// the file untouched.
 			return false, nil
 		}
+		healthExists = true
 		if _, present := h["corrupted_triage"]; present {
 			return false, nil // already there — never overwrite
 		}
 	}
 
-	newContent, changed := injectCorruptedTriage(string(raw))
+	newContent, changed := injectCorruptedTriage(string(raw), healthExists)
 	if !changed {
 		return false, nil
 	}
@@ -58,10 +60,13 @@ func ensureCorruptedTriageBlock(path string) (bool, error) {
 }
 
 // injectCorruptedTriage splices the corrupted_triage block into the raw config
-// text. If a top-level `health:` mapping exists, the block is inserted as its
-// first child (matching the existing child indentation); otherwise a new
-// `health:` section is appended. Returns the new content and whether it changed.
-func injectCorruptedTriage(content string) (string, bool) {
+// text. If a top-level `health:` mapping header is found, the block is inserted
+// as its first child (matching the existing child indentation). A new `health:`
+// section is appended ONLY when no health section exists at all: healthExists
+// (from structural parsing) guards against appending a duplicate when the text
+// scan can't locate the header (e.g. a quoted key like `'health':`). Returns the
+// new content and whether it changed.
+func injectCorruptedTriage(content string, healthExists bool) (string, bool) {
 	lines := strings.Split(content, "\n")
 
 	// Find the top-level `health:` key (no leading whitespace).
@@ -122,6 +127,14 @@ func injectCorruptedTriage(content string) (string, bool) {
 		out = append(out, block...)
 		out = append(out, lines[healthIdx+1:]...)
 		return strings.Join(out, "\n"), true
+	}
+
+	// No block-header `health:` line was found by the text scan. If structural
+	// parsing already found a health section (e.g. a quoted key `'health':` or
+	// some other form we can't splice into), do NOT append — that would create a
+	// duplicate health key. Leave the file unchanged.
+	if healthExists {
+		return content, false
 	}
 
 	// No health section at all — append one with 2-space children.

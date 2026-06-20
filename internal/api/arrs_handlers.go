@@ -564,6 +564,19 @@ func (s *Server) handleArrsWebhook(c *fiber.Ctx) error {
 
 	}
 
+	// Webhook -> triage handoff: an import/upgrade/rename may mean a replacement
+	// landed, so re-evaluate corrupted records that might now be provably safe to
+	// soft-delete. The triage is asynchronous, guarded and self-gates on being
+	// enabled, so this is a cheap no-op when triage is off. Fire it for every scan
+	// event, including those with no resolvable path to scan below.
+	if isScanEvent && s.healthWorker != nil {
+		slog.DebugContext(c.Context(), "Webhook -> corrupted-file triage handoff",
+			"event_type", req.EventType,
+			"instance", req.InstanceName,
+			"scanned_paths", len(pathsToScan))
+		s.healthWorker.TriggerTriage()
+	}
+
 	if len(pathsToScan) == 0 {
 		if isScanEvent {
 			slog.WarnContext(c.Context(), "No file path found in webhook payload to scan")
@@ -670,18 +683,6 @@ func (s *Server) handleArrsWebhook(c *fiber.Ctx) error {
 				slog.InfoContext(c.Context(), "Added file to health check queue from webhook with high priority", "path", normalizedPath)
 			}
 		}
-	}
-
-	// Webhook -> triage handoff: an import/upgrade/rename may mean a replacement
-	// landed, so re-evaluate corrupted records that might now be provably safe to
-	// soft-delete. The triage is asynchronous, guarded and self-gates on being
-	// enabled, so this is a cheap no-op when triage is off.
-	if isScanEvent && s.healthWorker != nil {
-		slog.DebugContext(c.Context(), "Webhook -> corrupted-file triage handoff",
-			"event_type", req.EventType,
-			"instance", req.InstanceName,
-			"scanned_paths", len(pathsToScan))
-		s.healthWorker.TriggerTriage()
 	}
 
 	return c.Status(200).JSON(fiber.Map{

@@ -1823,7 +1823,7 @@ func SaveToFile(config *Config, filename string) error {
 }
 
 // LoadConfig loads configuration from file and merges with defaults
-func LoadConfig(configFile string) (*Config, error) {
+func LoadConfig(ctx context.Context, configFile string) (*Config, error) {
 	config := DefaultConfig()
 
 	var targetConfigFile string
@@ -1898,9 +1898,9 @@ func LoadConfig(configFile string) (*Config, error) {
 	// existing block. Failure is non-fatal.
 	if used := viper.ConfigFileUsed(); used != "" {
 		if injected, err := ensureCorruptedTriageBlock(used); err != nil {
-			slog.WarnContext(context.Background(), "Failed to surface health.corrupted_triage in config file (continuing)", "path", used, "error", err)
+			slog.WarnContext(ctx, "Failed to surface health.corrupted_triage in config file (continuing)", "path", used, "error", err)
 		} else if injected {
-			slog.InfoContext(context.Background(), "Added health.corrupted_triage block to config (disabled by default) — review to enable", "path", used)
+			slog.InfoContext(ctx, "Added health.corrupted_triage block to config (disabled by default) — review to enable", "path", used)
 		}
 	}
 

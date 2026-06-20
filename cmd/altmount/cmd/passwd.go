@@ -30,7 +30,7 @@ func runPasswd(cmd *cobra.Command, args []string) error {
 	}
 
 	// 1. Load config to find database path
-	cfg, err := config.LoadConfig(configFile)
+	cfg, err := config.LoadConfig(cmd.Context(), configFile)
 	if err != nil {
 		return fmt.Errorf("failed to load config from %s: %w", configFile, err)
 	}

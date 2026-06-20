@@ -1011,6 +1011,25 @@ func (m *Manager) ownershipForInstance(ctx context.Context, inst *model.ConfigIn
 	}
 }
 
+// pathUnderRoot reports whether filePath is the root folder itself or lives
+// beneath it, using a directory-boundary check so a sibling such as
+// /root/media2 is not mistaken for being under /root/media. It tolerates either
+// path separator so it works for both Linux and Windows arr paths.
+func pathUnderRoot(filePath, folder string) bool {
+	folder = strings.TrimRight(folder, `/\`)
+	if folder == "" {
+		return false
+	}
+	if filePath == folder {
+		return true
+	}
+	if !strings.HasPrefix(filePath, folder) {
+		return false
+	}
+	sep := filePath[len(folder)]
+	return sep == '/' || sep == '\\'
+}
+
 // instanceManagesPath reports whether an instance's root folders cover filePath.
 // ok=false means the check could not be performed (client/lookup error, or an
 // arr type without a root-folder check such as sportarr); callers must treat
@@ -1027,7 +1046,7 @@ func (m *Manager) instanceManagesPath(ctx context.Context, inst *model.ConfigIns
 			return false, false
 		}
 		for _, f := range folders {
-			if strings.HasPrefix(filePath, f.Path) {
+			if pathUnderRoot(filePath, f.Path) {
 				return true, true
 			}
 		}
@@ -1050,7 +1069,7 @@ func (m *Manager) instanceManagesPath(ctx context.Context, inst *model.ConfigIns
 			return false, false
 		}
 		for _, f := range folders {
-			if strings.HasPrefix(filePath, f.Path) {
+			if pathUnderRoot(filePath, f.Path) {
 				return true, true
 			}
 		}
@@ -1065,7 +1084,7 @@ func (m *Manager) instanceManagesPath(ctx context.Context, inst *model.ConfigIns
 			return false, false
 		}
 		for _, f := range folders {
-			if strings.HasPrefix(filePath, f.Path) {
+			if pathUnderRoot(filePath, f.Path) {
 				return true, true
 			}
 		}
@@ -1080,7 +1099,7 @@ func (m *Manager) instanceManagesPath(ctx context.Context, inst *model.ConfigIns
 			return false, false
 		}
 		for _, f := range folders {
-			if strings.HasPrefix(filePath, f.Path) {
+			if pathUnderRoot(filePath, f.Path) {
 				return true, true
 			}
 		}

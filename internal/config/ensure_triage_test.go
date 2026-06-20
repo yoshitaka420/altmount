@@ -197,6 +197,25 @@ func TestEnsureTriage_SkipsHealthWithFlowMapping(t *testing.T) {
 	assert.Equal(t, string(before), string(after))
 }
 
+// A quoted top-level health key (`'health':` / `"health":`) is found by
+// structural parsing but not by the text scan; we must skip rather than append a
+// duplicate health block.
+func TestEnsureTriage_SkipsHealthWithQuotedKey(t *testing.T) {
+	for _, src := range []string{
+		"'health':\n  enabled: false\nmount_path: '/mnt/x'\n",
+		"\"health\":\n  enabled: false\nmount_path: '/mnt/x'\n",
+	} {
+		path := writeTempConfig(t, src)
+		before, _ := os.ReadFile(path)
+
+		injected, err := ensureCorruptedTriageBlock(path)
+		require.NoError(t, err)
+		assert.False(t, injected, "quoted health key must not append a duplicate block")
+		after, _ := os.ReadFile(path)
+		assert.Equal(t, string(before), string(after), "quoted-health file must be left untouched")
+	}
+}
+
 // A file we cannot parse is never rewritten.
 func TestEnsureTriage_SkipsUnparseableFile(t *testing.T) {
 	src := "this: : : not valid yaml\n  - broken\n"

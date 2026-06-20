@@ -72,3 +72,25 @@ func TestParseSeasonEpisode(t *testing.T) {
 		})
 	}
 }
+
+func TestPathUnderRoot(t *testing.T) {
+	cases := []struct {
+		filePath, folder string
+		want             bool
+	}{
+		{"/root/media/Movie/x.mkv", "/root/media", true}, // under root
+		{"/root/media", "/root/media", true},             // exact root
+		{"/root/media/", "/root/media", true},            // trailing sep then nothing
+		{"/root/media2/x.mkv", "/root/media", false},     // sibling prefix must NOT match
+		{"/root/mediaX", "/root/media", false},           // prefix without boundary
+		{"/root/media/x", "/root/media/", true},          // folder with trailing slash
+		{`C:\Media\Movie\x.mkv`, `C:\Media`, true},        // windows separator
+		{`C:\Media2\x.mkv`, `C:\Media`, false},            // windows sibling prefix
+		{"/a/b", "", false},                              // empty folder never matches
+	}
+	for _, c := range cases {
+		if got := pathUnderRoot(c.filePath, c.folder); got != c.want {
+			t.Errorf("pathUnderRoot(%q, %q) = %v, want %v", c.filePath, c.folder, got, c.want)
+		}
+	}
+}

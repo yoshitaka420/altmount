@@ -28,7 +28,7 @@ func init() {
 
 func runScan(cmd *cobra.Command, args []string) error {
 	// Load config to get port
-	cfg, err := config.LoadConfig(configFile)
+	cfg, err := config.LoadConfig(cmd.Context(), configFile)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
