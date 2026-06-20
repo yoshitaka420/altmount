@@ -643,6 +643,37 @@ func (m *Manager) triggerRadarrRescanByPath(ctx context.Context, client *radarr.
 		}
 	}
 
+	// tmdbId fallback: the stored internal Movie.Id goes stale when a movie is
+	// removed and re-added in Radarr (the re-added movie gets a new internal id),
+	// and a rename in Radarr defeats the path-based guessing above. tmdbId is
+	// immutable across remove+re-add, so resolve the movie directly by it before
+	// giving up, then proceed with the normal delete/blocklist + search flow.
+	if targetMovie == nil && metadata != nil && metadata.Movie != nil && metadata.Movie.TmdbId > 0 {
+		slog.InfoContext(ctx, "ID and path match failed, resolving Radarr movie by stable tmdbId",
+			"instance", instanceName,
+			"tmdb_id", metadata.Movie.TmdbId)
+
+		movies, err := client.GetMovieContext(ctx, &radarr.GetMovie{TMDBID: metadata.Movie.TmdbId})
+		if err != nil {
+			slog.WarnContext(ctx, "Failed to resolve Radarr movie by tmdbId",
+				"instance", instanceName,
+				"tmdb_id", metadata.Movie.TmdbId,
+				"error", err)
+		} else if len(movies) > 0 {
+			targetMovie = movies[0]
+			// Use the current movie's file id (the stale metadata.MovieFile.Id no
+			// longer applies after a re-add). May be 0 if the movie has no file.
+			if targetMovie.HasFile && targetMovie.MovieFile != nil {
+				targetMovieFileID = targetMovie.MovieFile.ID
+			}
+			slog.InfoContext(ctx, "Resolved Radarr movie by tmdbId fallback",
+				"instance", instanceName,
+				"tmdb_id", metadata.Movie.TmdbId,
+				"movie_id", targetMovie.ID,
+				"movie_title", targetMovie.Title)
+		}
+	}
+
 	if targetMovie == nil {
 		slog.WarnContext(ctx, "No movie found with matching file path or ID in Radarr library, attempting queue-based failure",
 			"instance", instanceName,
