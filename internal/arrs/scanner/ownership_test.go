@@ -231,6 +231,38 @@ func TestResolveSonarrOwnership_PathMatch(t *testing.T) {
 	}
 }
 
+func TestResolveSonarrOwnership_OverlappingPaths(t *testing.T) {
+	// Two series whose library paths overlap as substrings: "/tv/Show" is a
+	// substring of "/tv/Showcase". A file under "/tv/Showcase" must resolve to
+	// Showcase, not Show, even though "/tv/Show" appears inside the path.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/series"):
+			// "Show" is listed first so a naive substring match would grab it.
+			_, _ = w.Write([]byte(`[{"id":1,"title":"Show","path":"/tv/Show"},{"id":2,"title":"Showcase","path":"/tv/Showcase"}]`))
+		case strings.HasSuffix(r.URL.Path, "/episodeFile") && r.URL.Query().Get("seriesId") == "2":
+			_, _ = w.Write([]byte(`[{"id":201,"path":"/tv/Showcase/Season 01/Showcase S01E01.mkv"}]`))
+		default:
+			t.Errorf("unexpected request: %s", r.URL.String())
+		}
+	}))
+	defer srv.Close()
+
+	mgr := newResolverManager(nil)
+
+	own, err := mgr.resolveSonarrOwnership(context.Background(), newSonarrClient(srv),
+		"/tv/Showcase/Season 01/Showcase S01E01.mkv", "", "sonarr1", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if own.seriesID != 2 {
+		t.Fatalf("seriesID = %d; want 2 (Showcase, not Show via substring match)", own.seriesID)
+	}
+	if own.episodeFileID != 201 {
+		t.Errorf("episodeFileID = %d; want 201", own.episodeFileID)
+	}
+}
+
 func TestResolveSonarrOwnership_NoSeriesMatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/series") {
