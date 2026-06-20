@@ -524,6 +524,28 @@ func (r *HealthRepository) DeleteHealthRecord(ctx context.Context, filePath stri
 	return nil
 }
 
+// DeleteHealthRecordIfStatus atomically deletes a health record only when it is
+// still in the expected status. It returns true when a row was deleted and false
+// when the record was absent or had transitioned to a different status (e.g. it
+// got repaired between evaluation and delete). This is the status-guarded delete
+// used by corrupted-file triage to avoid racing a concurrent recovery.
+func (r *HealthRepository) DeleteHealthRecordIfStatus(ctx context.Context, filePath string, expected HealthStatus) (bool, error) {
+	filePath = normalizeHealthPath(filePath)
+	query := `DELETE FROM file_health WHERE file_path = ? AND status = ?`
+
+	result, err := r.db.ExecContext(ctx, query, filePath, string(expected))
+	if err != nil {
+		return false, fmt.Errorf("failed to status-guarded delete health record: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	return rowsAffected > 0, nil
+}
+
 // DeleteHealthRecordByLibraryPath deletes the health record matching the given absolute library path.
 // Returns the file_path of the deleted record so the caller can use it for metadata cleanup.
 func (r *HealthRepository) DeleteHealthRecordByLibraryPath(ctx context.Context, libraryPath string) (string, error) {

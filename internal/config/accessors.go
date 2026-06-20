@@ -189,6 +189,42 @@ func (c *Config) GetRepairEnabled() bool {
 	return *c.Health.Repair.Enabled
 }
 
+// GetCorruptedTriageEnabled returns whether corrupted-file auto-delete triage is
+// enabled. It defaults to false (fail-safe): triage never runs unless explicitly
+// turned on.
+func (c *Config) GetCorruptedTriageEnabled() bool {
+	if c.Health.CorruptedTriage.Enabled == nil {
+		return false
+	}
+	return *c.Health.CorruptedTriage.Enabled
+}
+
+// GetCorruptedTriageMaxDeletesPerRun returns the per-run soft-delete cap.
+func (c *Config) GetCorruptedTriageMaxDeletesPerRun() int {
+	if c.Health.CorruptedTriage.MaxDeletesPerRun <= 0 {
+		return 50
+	}
+	return c.Health.CorruptedTriage.MaxDeletesPerRun
+}
+
+// GetCorruptedTriageMassEventThreshold returns the candidate count above which a
+// sweep run aborts without deleting anything.
+func (c *Config) GetCorruptedTriageMassEventThreshold() int {
+	if c.Health.CorruptedTriage.MassEventThreshold <= 0 {
+		return 500
+	}
+	return c.Health.CorruptedTriage.MassEventThreshold
+}
+
+// GetCorruptedTriageBackstopInterval returns the base cadence of the adaptive
+// backstop sweep.
+func (c *Config) GetCorruptedTriageBackstopInterval() time.Duration {
+	if c.Health.CorruptedTriage.BackstopIntervalMinutes <= 0 {
+		return 360 * time.Minute
+	}
+	return time.Duration(c.Health.CorruptedTriage.BackstopIntervalMinutes) * time.Minute
+}
+
 // GetRepairInterval returns the repair check interval
 func (c *Config) GetRepairInterval() time.Duration {
 	if c.Health.Repair.IntervalMinutes <= 0 {
