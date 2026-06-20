@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/javi11/altmount/internal/arrs"
 	"github.com/javi11/altmount/internal/database"
 )
 
@@ -218,7 +219,7 @@ func (hw *HealthWorker) triageOne(ctx context.Context, fh *database.FileHealth, 
 		}
 	}()
 
-	reason, deletable := hw.triageClassify(ctx, fh, stats)
+	reason, deletable, own := hw.triageClassify(ctx, fh, stats)
 	if !deletable {
 		return
 	}
@@ -258,21 +259,25 @@ func (hw *HealthWorker) triageOne(ctx context.Context, fh *database.FileHealth, 
 		stats.replaced++
 	}
 
+	// Per-action audit log: enough to reconstruct every deletion decision.
 	slog.InfoContext(ctx, "Triage: soft-deleted corrupted record",
 		"file_path", fh.FilePath,
-		"reason", string(reason))
+		"reason", string(reason),
+		"instance", own.InstanceName,
+		"owned", own.Managed,
+		"replacement_id", own.ReplacementFileID)
 }
 
 // triageClassify decides, read-only and fail-closed, whether a corrupted record
 // is provably safe to soft-delete. It returns (reason, true) only for the safe
 // cases; every uncertain case returns (_, false) and is counted as skipped.
-func (hw *HealthWorker) triageClassify(ctx context.Context, fh *database.FileHealth, stats *triageStats) (triageReason, bool) {
+func (hw *HealthWorker) triageClassify(ctx context.Context, fh *database.FileHealth, stats *triageStats) (triageReason, bool, arrs.OwnershipResult) {
 	// 1. file_removed zombie: the .meta backing the virtual file is gone, so the
 	//    record points at nothing. (An unreadable-but-present .meta is real
 	//    corruption, not a zombie — that returns err != nil and falls through.)
 	meta, err := hw.metadataService.ReadFileMetadata(fh.FilePath)
 	if err == nil && meta == nil {
-		return triageReasonZombie, true
+		return triageReasonZombie, true, arrs.OwnershipResult{}
 	}
 
 	// 2. Ownership — read-only and fail-closed, sharing the repair resolvers.
@@ -283,19 +288,19 @@ func (hw *HealthWorker) triageClassify(ctx context.Context, fh *database.FileHea
 		// Could not determine ownership (lookup error/timeout, or an arr type we
 		// cannot introspect). Fail closed: do NOT delete.
 		stats.skippedFailClosed++
-		return "", false
+		return "", false, own
 	}
 	if !own.Managed {
 		// Proven unowned: no configured arr manages this path.
-		return triageReasonUnowned, true
+		return triageReasonUnowned, true, own
 	}
 	if own.HasReplacement {
 		// The owning arr already has a different healthy file.
-		return triageReasonReplaced, true
+		return triageReasonReplaced, true, own
 	}
 	// Managed with no replacement: this could be the arr's only copy. Keep it.
 	stats.skippedOwned++
-	return "", false
+	return "", false, own
 }
 
 // minDuration returns the smaller of two durations.

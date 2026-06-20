@@ -551,9 +551,10 @@ func (m *Manager) TriggerDownloadScan(ctx context.Context, instanceType string) 
 // reports that the arr already holds a different healthy file for the movie
 // (upgrade/re-import), which the repair path treats as "already satisfied".
 type radarrResolution struct {
-	movie          *radarr.Movie
-	movieFileID    int64
-	hasReplacement bool
+	movie             *radarr.Movie
+	movieFileID       int64
+	hasReplacement    bool
+	replacementFileID int64
 }
 
 // resolveRadarrOwnership resolves the Radarr movie/file for a path using the same
@@ -589,6 +590,7 @@ func (m *Manager) resolveRadarrOwnership(ctx context.Context, client *radarr.Rad
 						"old_file_id", metadata.MovieFile.Id,
 						"new_file_id", movie.MovieFile.ID)
 					res.hasReplacement = true
+					res.replacementFileID = movie.MovieFile.ID
 					return res, nil
 				}
 				res.movieFileID = movie.MovieFile.ID
@@ -687,12 +689,13 @@ func (m *Manager) resolveRadarrOwnership(ctx context.Context, client *radarr.Rad
 // triage; performs no mutations. hasReplacement reports the arr already holds a
 // different healthy file for the episode (upgrade/re-import).
 type sonarrResolution struct {
-	seriesFound    bool
-	seriesID       int64
-	seriesTitle    string
-	episodeFileID  int64
-	episodeIDs     []int64
-	hasReplacement bool
+	seriesFound       bool
+	seriesID          int64
+	seriesTitle       string
+	episodeFileID     int64
+	episodeIDs        []int64
+	hasReplacement    bool
+	replacementFileID int64
 }
 
 // resolveSonarrOwnership resolves the Sonarr series/episode-file for a path using
@@ -873,6 +876,7 @@ func (m *Manager) resolveSonarrOwnership(ctx context.Context, client *sonarr.Son
 							"old_file_id", res.episodeFileID,
 							"new_file_id", ef.ID)
 						res.hasReplacement = true
+						res.replacementFileID = ef.ID
 						return res, nil
 					}
 				}
@@ -901,6 +905,9 @@ type OwnershipResult struct {
 	// healthy file for the item (upgrade/re-import). Only meaningful when
 	// LookupOK && Managed.
 	HasReplacement bool
+	// ReplacementFileID is the arr's current (different) file id when
+	// HasReplacement is true; 0 otherwise. For observability only.
+	ReplacementFileID int64
 	// InstanceName is the managing instance (for logging), if one was found.
 	InstanceName string
 }
@@ -974,6 +981,7 @@ func (m *Manager) ownershipForInstance(ctx context.Context, inst *model.ConfigIn
 			return OwnershipResult{LookupOK: false}
 		}
 		res.HasReplacement = r.hasReplacement
+		res.ReplacementFileID = r.replacementFileID
 		return res
 	case "sonarr", "whisparr":
 		var (
@@ -993,6 +1001,7 @@ func (m *Manager) ownershipForInstance(ctx context.Context, inst *model.ConfigIn
 			return OwnershipResult{LookupOK: false}
 		}
 		res.HasReplacement = r.hasReplacement
+		res.ReplacementFileID = r.replacementFileID
 		return res
 	default:
 		// lidarr/readarr/sportarr: the file is managed but we cannot assess

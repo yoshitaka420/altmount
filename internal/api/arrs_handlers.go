@@ -677,6 +677,10 @@ func (s *Server) handleArrsWebhook(c *fiber.Ctx) error {
 	// soft-delete. The triage is asynchronous, guarded and self-gates on being
 	// enabled, so this is a cheap no-op when triage is off.
 	if isScanEvent && s.healthWorker != nil {
+		slog.DebugContext(c.Context(), "Webhook -> corrupted-file triage handoff",
+			"event_type", req.EventType,
+			"instance", req.InstanceName,
+			"scanned_paths", len(pathsToScan))
 		s.healthWorker.TriggerTriage()
 	}
 
