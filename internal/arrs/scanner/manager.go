@@ -868,7 +868,7 @@ func (m *Manager) resolveSonarrOwnership(ctx context.Context, client *sonarr.Son
 			episodeFiles, err := m.data.GetEpisodeFiles(ctx, client, instanceName, res.seriesID)
 			if err == nil {
 				for _, ef := range episodeFiles {
-					if ef.Path == filePath || (metadata != nil && ef.SceneName == metadata.EpisodeFile.SceneName) {
+					if ef.Path == filePath || (metadata != nil && metadata.EpisodeFile != nil && ef.SceneName == metadata.EpisodeFile.SceneName) {
 						slog.InfoContext(ctx, "Smart Repair Guard: Episode already has a different healthy file (likely upgraded). Skipping repair.",
 							"old_file_id", res.episodeFileID,
 							"new_file_id", ef.ID)
