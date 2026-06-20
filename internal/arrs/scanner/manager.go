@@ -829,45 +829,27 @@ func (m *Manager) resolveSonarrOwnership(ctx context.Context, client *sonarr.Son
 		return res, fmt.Errorf("failed to get episodes for series %s: %w", res.seriesTitle, err)
 	}
 
-	// Class-2 path-match fallback: when the mutable episode-file id and the
-	// path/filename both failed to resolve the file, fall back to the stable
-	// season+episode identity parsed from the path. The internal EpisodeFile.Id
-	// changes on re-import and the path changes on rename, but season+episode is
-	// stable, so this recovers a dead episode the arr still owns (HasFile).
-	// Ambiguous inputs (dailies, anime absolute numbering, multi-episode files)
-	// return ok=false from parseSeasonEpisode and are left as corrupted.
-	if res.episodeFileID == 0 {
-		if season, epNum, ok := parseSeasonEpisode(filePath); ok {
-			for _, episode := range episodes {
-				if episode.SeasonNumber == season && episode.EpisodeNumber == epNum &&
-					episode.HasFile && episode.EpisodeFileID > 0 {
-					slog.InfoContext(ctx, "Found Sonarr episode by stable season+episode after id/path match failed",
-						"series", res.seriesTitle,
-						"season", season,
-						"episode", epNum,
-						"episode_file_id", episode.EpisodeFileID)
-					res.episodeFileID = episode.EpisodeFileID
-					break
-				}
-			}
-		}
-	}
-
+	// Resolve the episodes linked to the seeded (metadata/path) episode-file id.
 	if res.episodeFileID > 0 {
-		// Found the file record - get episodes linked to it
 		for _, episode := range episodes {
 			if episode.EpisodeFileID == res.episodeFileID {
 				res.episodeIDs = append(res.episodeIDs, episode.ID)
 			}
 		}
+	}
 
-		// Smart Repair Guard: If we had a file ID but it's no longer found linked to any episode,
-		// it's likely been upgraded or deleted.
-		if len(res.episodeIDs) == 0 {
+	// Recovery: nothing resolved yet — either there was no id, or the seeded id is
+	// stale (no current episode links it, e.g. Sonarr renamed/re-imported).
+	if len(res.episodeIDs) == 0 {
+		// If a seeded id was stale, first check whether a DIFFERENT file already
+		// satisfies the episode (a real replacement/upgrade). If so, that's an
+		// upgrade, not a repair — return early. Otherwise fall through: the stable
+		// season+episode identity below can still recover the dead-but-owned file
+		// (a stale metadata id must not block recovery).
+		if res.episodeFileID > 0 {
 			slog.InfoContext(ctx, "Smart Repair Guard: Episode file ID is no longer active. Checking for newer replacements.",
 				"old_file_id", res.episodeFileID)
 
-			// Try to find if any episode currently has a different file at the same path or with same scene name
 			episodeFiles, err := m.data.GetEpisodeFiles(ctx, client, instanceName, res.seriesID)
 			if err == nil {
 				for _, ef := range episodeFiles {
@@ -882,6 +864,38 @@ func (m *Manager) resolveSonarrOwnership(ctx context.Context, client *sonarr.Son
 						res.replacementFileID = ef.ID
 						return res, nil
 					}
+				}
+			}
+		}
+
+		// Class-2 path-match fallback: fall back to the stable season+episode
+		// identity parsed from the path. EpisodeFile.Id changes on re-import and the
+		// path changes on rename, but season+episode is stable, so this recovers a
+		// dead episode the arr still owns (HasFile) — including when the seeded id is
+		// stale (no episode links it). A match OVERRIDES the stale id; if no match is
+		// found the original id is left untouched (no regression). Ambiguous inputs
+		// (dailies, anime absolute numbering, multi-episode files) return ok=false
+		// from parseSeasonEpisode and are left as corrupted.
+		if season, epNum, ok := parseSeasonEpisode(filePath); ok {
+			for _, episode := range episodes {
+				if episode.SeasonNumber == season && episode.EpisodeNumber == epNum &&
+					episode.HasFile && episode.EpisodeFileID > 0 {
+					slog.InfoContext(ctx, "Found Sonarr episode by stable season+episode after id/path match failed",
+						"series", res.seriesTitle,
+						"season", season,
+						"episode", epNum,
+						"episode_file_id", episode.EpisodeFileID)
+					res.episodeFileID = episode.EpisodeFileID
+					break
+				}
+			}
+		}
+
+		// Resolve episodes for the (possibly recovered) id.
+		if res.episodeFileID > 0 {
+			for _, episode := range episodes {
+				if episode.EpisodeFileID == res.episodeFileID {
+					res.episodeIDs = append(res.episodeIDs, episode.ID)
 				}
 			}
 		}

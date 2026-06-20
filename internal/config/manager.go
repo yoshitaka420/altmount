@@ -1520,6 +1520,7 @@ func DefaultConfig(configDir ...string) *Config {
 	failureMaskingEnabled := false
 	repairEnabled := true
 	repairExponentialBackoff := true
+	corruptedTriageEnabled := false // Corrupted-file auto-delete triage disabled by default
 
 	// Set paths based on whether we're running in Docker or have a specific config directory
 	var dbPath, metadataPath, logPath, rclonePath, cachePath, backupPath string
@@ -1679,6 +1680,12 @@ func DefaultConfig(configDir ...string) *Config {
 				IntervalMinutes:    60,
 				MaxCoolDownHours:   24,
 				ExponentialBackoff: &repairExponentialBackoff,
+			},
+			CorruptedTriage: CorruptedTriageConfig{
+				Enabled:                 &corruptedTriageEnabled, // off by default
+				MaxDeletesPerRun:        50,
+				MassEventThreshold:      500,
+				BackstopIntervalMinutes: 60,
 			},
 		},
 		SABnzbd: SABnzbdConfig{

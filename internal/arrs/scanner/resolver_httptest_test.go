@@ -175,6 +175,43 @@ func TestResolveSonarrOwnership_EmptySceneNotReplacement(t *testing.T) {
 	assert.False(t, res.hasReplacement, "empty scene name must not count as a replacement")
 }
 
+// TestResolveSonarrOwnership_StaleIdRecoversViaSeasonEpisode verifies that a STALE
+// metadata episode-file id (no current episode links it, and no replacement file
+// exists) does not dead-end: the resolver clears the stale id and recovers the
+// dead-but-owned episode via the stable season+episode identity.
+func TestResolveSonarrOwnership_StaleIdRecoversViaSeasonEpisode(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v3/episode", func(w http.ResponseWriter, _ *http.Request) {
+		// The episode is owned (HasFile) under the CURRENT file id 77, not the
+		// stale metadata id 88.
+		writeJSON(w, []map[string]any{
+			{"id": 300, "seasonNumber": 1, "episodeNumber": 3, "hasFile": true, "episodeFileId": 77},
+		})
+	})
+	mux.HandleFunc("/api/v3/episodeFile", func(w http.ResponseWriter, _ *http.Request) {
+		// Only the stale file itself is returned (same id as the seeded one), so the
+		// Smart Repair Guard finds NO different replacement.
+		writeJSON(w, []map[string]any{{"id": 88, "path": "/tv/Show/old.mkv", "sceneName": ""}})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	m := newResolverManager()
+	// id-precision: series id 10, stale episode-file id 88, empty scene name.
+	meta := &model.WebhookMetadata{
+		Series:      &model.SeriesMetadata{Id: 10},
+		EpisodeFile: &model.EpisodeFileMetadata{Id: 88, SceneName: ""},
+	}
+	res, err := m.resolveSonarrOwnership(context.Background(), newTestSonarr(srv),
+		"/tv/Show/Season 01/Show.S01E03.mkv", "", "sonarr-1", meta)
+	require.NoError(t, err)
+	assert.True(t, res.seriesFound)
+	assert.False(t, res.hasReplacement, "stale id with no other file must not count as a replacement")
+	// Recovered via stable season+episode, not the stale metadata id.
+	assert.Equal(t, int64(77), res.episodeFileID)
+	assert.Contains(t, res.episodeIDs, int64(300))
+}
+
 // TestResolveSonarrOwnership_NilEpisodeFileGuard exercises the Smart Repair Guard
 // path with metadata present but EpisodeFile nil — it must not panic.
 func TestResolveSonarrOwnership_NilEpisodeFileGuard(t *testing.T) {

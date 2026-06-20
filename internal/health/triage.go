@@ -241,9 +241,7 @@ func (hw *HealthWorker) triageOne(ctx context.Context, fh *database.FileHealth, 
 
 	// Row removed; now remove the .meta (and its .id sidecar) ONLY — never the
 	// library file under the mount, never the source NZB.
-	cfg := hw.configGetter()
-	relativePath := strings.TrimPrefix(fh.FilePath, cfg.MountPath)
-	relativePath = strings.TrimPrefix(relativePath, "/")
+	relativePath := hw.metadataRelativePath(fh.FilePath)
 	if err := hw.metadataService.DeleteFileMetadata(relativePath); err != nil {
 		slog.ErrorContext(ctx, "Triage: failed to delete metadata after row delete",
 			"file_path", fh.FilePath, "error", err)
@@ -275,7 +273,7 @@ func (hw *HealthWorker) triageClassify(ctx context.Context, fh *database.FileHea
 	// 1. file_removed zombie: the .meta backing the virtual file is gone, so the
 	//    record points at nothing. (An unreadable-but-present .meta is real
 	//    corruption, not a zombie — that returns err != nil and falls through.)
-	meta, err := hw.metadataService.ReadFileMetadata(fh.FilePath)
+	meta, err := hw.metadataService.ReadFileMetadata(hw.metadataRelativePath(fh.FilePath))
 	if err == nil && meta == nil {
 		return triageReasonZombie, true, arrs.OwnershipResult{}
 	}
@@ -301,6 +299,14 @@ func (hw *HealthWorker) triageClassify(ctx context.Context, fh *database.FileHea
 	// Managed with no replacement: this could be the arr's only copy. Keep it.
 	stats.skippedOwned++
 	return "", false, own
+}
+
+// metadataRelativePath converts a health record file path to the mount-relative
+// virtual path that the metadata service (ReadFileMetadata / DeleteFileMetadata)
+// expects, so both operate on the same key.
+func (hw *HealthWorker) metadataRelativePath(filePath string) string {
+	rel := strings.TrimPrefix(filePath, hw.configGetter().MountPath)
+	return strings.TrimPrefix(rel, "/")
 }
 
 // minDuration returns the smaller of two durations.
