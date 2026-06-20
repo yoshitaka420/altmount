@@ -34,7 +34,14 @@ func ensureCorruptedTriageBlock(path string) (bool, error) {
 	if err := yaml.Unmarshal(raw, &root); err != nil {
 		return false, nil
 	}
-	if h, ok := root["health"].(map[string]any); ok {
+	if hv, exists := root["health"]; exists {
+		h, ok := hv.(map[string]any)
+		if !ok {
+			// `health` exists but is not a mapping (e.g. a scalar like
+			// `health: true`). We can't safely add child keys under it — leave
+			// the file untouched.
+			return false, nil
+		}
 		if _, present := h["corrupted_triage"]; present {
 			return false, nil // already there — never overwrite
 		}
@@ -64,8 +71,11 @@ func injectCorruptedTriage(content string) (string, bool) {
 			continue
 		}
 		trimmed := strings.TrimRight(ln, " \t\r")
-		key := strings.SplitN(trimmed, ":", 2)[0]
-		if key == "health" {
+		parts := strings.SplitN(trimmed, ":", 2)
+		// Match only a real mapping header `health:` (nothing but whitespace
+		// after the colon) — not a scalar like `health: true`. Trimming the key
+		// also tolerates `health :` (space before the colon).
+		if strings.TrimSpace(parts[0]) == "health" && len(parts) == 2 && strings.TrimSpace(parts[1]) == "" {
 			healthIdx = i
 			break
 		}

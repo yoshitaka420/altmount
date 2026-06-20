@@ -255,7 +255,7 @@ func (s *Service) DiscoverFileMetadata(ctx context.Context, filePath, relativePa
 // ResolveOwnership determines, read-only and fail-closed, whether a configured
 // arr owns the given file and whether the owner already holds a replacement.
 // Used by the corrupted-file triage to decide if a file is safe to soft-delete.
-func (s *Service) ResolveOwnership(ctx context.Context, filePath, relativePath string, metadataStr *string) scanner.OwnershipResult {
+func (s *Service) ResolveOwnership(ctx context.Context, filePath, relativePath string, metadataStr *string) OwnershipResult {
 	return s.scanner.ResolveOwnership(ctx, filePath, relativePath, metadataStr)
 }
 

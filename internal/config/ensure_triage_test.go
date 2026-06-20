@@ -70,7 +70,7 @@ mount_path: '/mnt/altmount'
 	assert.Contains(t, text, "port: 8080 # keep me", "unrelated comments preserved")
 	assert.Contains(t, text, "mount_path: '/mnt/altmount'", "unrelated keys preserved")
 	assert.Contains(t, text, "# Corrupted-file auto-delete triage", "safety comments injected")
-	assert.Contains(t, text, "soft-delete", "soft-delete comment present (case-insensitive ok)")
+	assert.Contains(t, strings.ToLower(text), "soft-delete", "soft-delete comment present (case-insensitive)")
 	assert.Contains(t, strings.ToLower(text), "fails closed", "fail-closed comment present")
 }
 
@@ -153,6 +153,20 @@ func TestEnsureTriage_PreservesIndentation(t *testing.T) {
 
 	raw, _ := os.ReadFile(path)
 	assert.Contains(t, string(raw), "    corrupted_triage:", "key aligned to 4-space children")
+}
+
+// A scalar `health` value (not a mapping) is never touched — we can't add child
+// keys under it, so the file is left exactly as-is.
+func TestEnsureTriage_SkipsScalarHealth(t *testing.T) {
+	src := "health: true\nmount_path: '/mnt/x'\n"
+	path := writeTempConfig(t, src)
+	before, _ := os.ReadFile(path)
+
+	injected, err := ensureCorruptedTriageBlock(path)
+	require.NoError(t, err)
+	assert.False(t, injected, "must not inject under a scalar health value")
+	after, _ := os.ReadFile(path)
+	assert.Equal(t, string(before), string(after), "scalar-health file must be left untouched")
 }
 
 // A file we cannot parse is never rewritten.
