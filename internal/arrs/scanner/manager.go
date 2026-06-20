@@ -711,6 +711,35 @@ func (m *Manager) triggerRadarrRescanByPath(ctx context.Context, client *radarr.
 	return nil
 }
 
+// parseSonarrSeasonEpisode extracts a single season/episode pair from a file
+// path's SxxExx token. It returns ok=false for daily (date-based) episodes,
+// anime absolute numbering (no SxxExx token), and multi-episode files — those
+// need richer handling than a single season/episode pair can safely provide and
+// are intentionally left for manual repair.
+func parseSonarrSeasonEpisode(path string) (season, episode int, ok bool) {
+	name := filepath.Base(path)
+	if tvMultiEpisodePattern.MatchString(name) {
+		return 0, 0, false
+	}
+
+	matches := tvSeasonPattern.FindStringSubmatch(name)
+	if len(matches) < 3 {
+		return 0, 0, false
+	}
+
+	season, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0, 0, false
+	}
+
+	episode, err = strconv.Atoi(matches[2])
+	if err != nil {
+		return 0, 0, false
+	}
+
+	return season, episode, true
+}
+
 // triggerSonarrRescanByPath triggers a rescan in Sonarr for the given file path
 func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.Sonarr, filePath, relativePath, instanceName string, metadata *model.WebhookMetadata) error {
 	slog.InfoContext(ctx, "Searching Sonarr for matching series",
@@ -909,6 +938,54 @@ func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.
 		// Fallback: search in Sonarr download queue
 		if err := m.failSonarrQueueItemByPath(ctx, client, filePath); err == nil {
 			return nil
+		}
+	}
+
+	// Season/Episode fallback: when neither the metadata EpisodeFile.Id nor the
+	// path/filename matched a file record (both go stale on a Sonarr rename or
+	// re-import), fall back to the stable SeasonNumber+EpisodeNumber parsed from
+	// the path against the already-fetched episodes list. This recovers the
+	// common case where Sonarr still owns the episode (HasFile=true) but the file
+	// record no longer lines up with our stored path, which otherwise dead-ends in
+	// ErrPathMatchFailed and a permanently corrupted record. Dailies, anime
+	// absolute numbering, and multi-episode files are deliberately left unmatched.
+	if len(episodeIDs) == 0 {
+		season, episode, ok := parseSonarrSeasonEpisode(filePath)
+		if !ok && relativePath != "" {
+			season, episode, ok = parseSonarrSeasonEpisode(relativePath)
+		}
+
+		if ok {
+			for _, ep := range episodes {
+				if ep.SeasonNumber != season || ep.EpisodeNumber != episode {
+					continue
+				}
+
+				slog.InfoContext(ctx, "Found Sonarr episode by season/episode fallback",
+					"series_title", targetSeriesTitle,
+					"season", season,
+					"episode", episode,
+					"has_file", ep.HasFile,
+					"episode_file_id", ep.EpisodeFileID)
+
+				// If Sonarr still owns a (dead) file for this episode, blocklist the
+				// release and delete the stale file record before re-searching.
+				if ep.HasFile && ep.EpisodeFileID > 0 {
+					if err := m.blocklistSonarrEpisodeFile(ctx, client, targetSeriesID, ep.EpisodeFileID); err != nil {
+						slog.WarnContext(ctx, "Failed to blocklist Sonarr release", "error", err)
+					}
+
+					if err := client.DeleteEpisodeFileContext(ctx, ep.EpisodeFileID); err != nil {
+						slog.WarnContext(ctx, "Failed to delete episode file from Sonarr, continuing with search",
+							"instance", instanceName,
+							"episode_file_id", ep.EpisodeFileID,
+							"error", err)
+					}
+				}
+
+				episodeIDs = append(episodeIDs, ep.ID)
+				break
+			}
 		}
 	}
 
