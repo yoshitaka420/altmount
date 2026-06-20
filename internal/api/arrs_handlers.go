@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/javi11/altmount/internal/arrs/model"
 	"github.com/javi11/altmount/internal/database"
+	"github.com/javi11/altmount/internal/health/triage"
 )
 
 // arrWebhookDeleteGrace is how long after a queue item completes its
@@ -672,10 +674,58 @@ func (s *Server) handleArrsWebhook(c *fiber.Ctx) error {
 		}
 	}
 
+	// Webhook handoff: the arr just changed its library, so hand the affected
+	// paths to corrupted-file triage. Any record that is now redundant
+	// (replaced/unowned) gets the safe soft-delete treatment; freshly imported
+	// files resolve as owned and are kept. Runs in the background so it never
+	// blocks the webhook response, and is a no-op unless triage is enabled.
+	s.handoffToTriage(pathsToScan, normalize)
+
 	return c.Status(200).JSON(fiber.Map{
 		"success": true,
 		"message": "Webhook processed",
 	})
+}
+
+// handoffToTriage hands the webhook's affected paths to corrupted-file triage.
+// It resolves a corrupted health record for each path (by library path, then by
+// normalized virtual path) and routes it through the fail-closed triage engine.
+// The work runs in a detached goroutine with its own timeout.
+func (s *Server) handoffToTriage(paths []string, normalize func(string) string) {
+	if s.healthWorker == nil || s.healthRepo == nil || len(paths) == 0 {
+		return
+	}
+	tr := s.healthWorker.Triage()
+	if tr == nil || !tr.Enabled() {
+		return
+	}
+
+	pathsCopy := append([]string(nil), paths...)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		slog.InfoContext(ctx, "ARR webhook handoff to corrupted-file triage", "candidate_paths", len(pathsCopy))
+
+		deleted := 0
+		for _, p := range pathsCopy {
+			var item *database.FileHealth
+			if rec, err := s.healthRepo.GetFileHealthByLibraryPath(ctx, p); err == nil && rec != nil {
+				item = rec
+			} else if rec, err := s.healthRepo.GetFileHealth(ctx, normalize(p)); err == nil && rec != nil {
+				item = rec
+			}
+			if item == nil || item.Status != database.HealthStatusCorrupted {
+				continue
+			}
+			if tr.ProcessItem(ctx, item, triage.SourceWebhook) {
+				deleted++
+			}
+		}
+		if deleted > 0 {
+			slog.InfoContext(ctx, "ARR webhook handoff soft-deleted corrupted records", "deleted", deleted, "candidate_paths", len(pathsCopy))
+		}
+	}()
 }
 
 // ArrsInstanceResponse represents an arrs instance in API responses
