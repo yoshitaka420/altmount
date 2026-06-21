@@ -670,11 +670,15 @@ func (m *Manager) triggerRadarrRescanByPath(ctx context.Context, client *radarr.
 			if targetMovie.HasFile && targetMovie.MovieFile != nil {
 				moviePath := targetMovie.MovieFile.Path
 
-				// Confirm the current file IS the corrupt target using the same
-				// path heuristics as the cached path match above (exact, filename,
-				// .strm-stripped, relative-suffix), now against fresh data.
-				isCorruptTarget := moviePath == filePath ||
-					filepath.Base(moviePath) == filepath.Base(filePath)
+				// Confirm the current file IS the corrupt target using path-anchored
+				// checks against fresh data: exact path, .strm-stripped full path, or
+				// relative-path suffix. Filename-only matching is deliberately excluded:
+				// in symlink libraries the rescan path is a real media path, so after a
+				// folder rename a same-named *healthy* replacement would pass a basename
+				// check and be wrongly deleted. The anchored checks already cover the only
+				// legitimate case here (a stale-cache miss of the re-added movie, where
+				// the fresh path matches exactly).
+				isCorruptTarget := moviePath == filePath
 				if !isCorruptTarget {
 					if before, ok := strings.CutSuffix(filePath, ".strm"); ok {
 						if strings.TrimSuffix(moviePath, filepath.Ext(moviePath)) == before {
