@@ -74,6 +74,11 @@ func (m *mockARRsService) DiscoverFileMetadata(_ context.Context, _, _, _, _ str
 	return nil, nil
 }
 
+func (m *mockARRsService) ResolveOwnership(_ context.Context, _, _ string, _ *model.WebhookMetadata) model.Ownership {
+	// Unknown is the fail-closed default; the repair e2e tests do not exercise triage.
+	return model.Ownership{Status: model.OwnershipUnknown}
+}
+
 // mockImportService implements importer.ImportService for testing.
 type mockImportService struct {
 	importer.ImportService

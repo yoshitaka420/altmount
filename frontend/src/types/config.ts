@@ -119,6 +119,7 @@ export interface HealthConfig {
 	read_timeout_seconds?: number; // Timeout for data verification
 	acceptable_missing_segments_percentage?: number;
 	repair: RepairConfig;
+	corrupted_triage: CorruptedTriageConfig;
 }
 
 export interface RepairConfig {
@@ -127,6 +128,13 @@ export interface RepairConfig {
 	max_cooldown_hours: number;
 	max_repair_retries: number; // Max repair notification retries
 	exponential_backoff: boolean;
+}
+
+export interface CorruptedTriageConfig {
+	enabled?: boolean; // Enable corrupted-file auto-delete triage (default false)
+	max_deletes_per_run?: number; // Cap on soft-deletes per triage run
+	mass_event_threshold?: number; // Abort a sweep if candidates exceed this
+	backstop_interval_minutes?: number; // Base cadence of the adaptive backstop sweep
 }
 
 // Dry run result for library sync
@@ -379,6 +387,7 @@ export interface HealthUpdateRequest {
 	verify_data?: boolean;
 	acceptable_missing_segments_percentage?: number;
 	repair?: Partial<RepairConfig>;
+	corrupted_triage?: Partial<CorruptedTriageConfig>;
 }
 
 // RClone update request

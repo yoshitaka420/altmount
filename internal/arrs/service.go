@@ -248,6 +248,12 @@ func (s *Service) DiscoverFileMetadata(ctx context.Context, filePath, relativePa
 	return s.scanner.DiscoverFileMetadata(ctx, filePath, relativePath, nzbName, libraryPath)
 }
 
+// ResolveOwnership reports, read-only and fail-closed, whether any *arr instance
+// currently owns the given file. The zero/Unknown status means "do not delete".
+func (s *Service) ResolveOwnership(ctx context.Context, filePath, relativePath string, metadata *model.WebhookMetadata) model.Ownership {
+	return s.scanner.ResolveOwnership(ctx, filePath, relativePath, metadata)
+}
+
 // TriggerScanForFile finds the ARR instance managing the file and triggers a download scan on it.
 func (s *Service) TriggerScanForFile(ctx context.Context, filePath string) error {
 	return s.scanner.TriggerScanForFile(ctx, filePath)

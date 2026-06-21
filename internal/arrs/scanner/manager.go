@@ -551,97 +551,21 @@ func (m *Manager) triggerRadarrRescanByPath(ctx context.Context, client *radarr.
 		"file_path", filePath,
 		"relative_path", relativePath)
 
-	var targetMovie *radarr.Movie
-	var targetMovieFileID int64
-	var err error
-
-	// ID-Based Precision: If we have the exact movie ID and file ID from metadata, use them directly
-	if metadata != nil && metadata.Movie != nil && metadata.MovieFile != nil && metadata.Movie.Id > 0 && metadata.MovieFile.Id > 0 {
-		slog.InfoContext(ctx, "ID-Based Precision: Using metadata IDs for Radarr repair",
-			"movie_id", metadata.Movie.Id,
-			"movie_file_id", metadata.MovieFile.Id)
-
-		movies, err := m.data.GetMovies(ctx, client, instanceName)
-		if err != nil {
-			return fmt.Errorf("failed to get movies from Radarr for ID lookup: %w", err)
-		}
-		for _, movie := range movies {
-			if movie.ID == metadata.Movie.Id {
-				targetMovie = movie
-
-				// Smart Repair Guard: Check if the movie already has a newer/different healthy file
-				if movie.HasFile && movie.MovieFile != nil {
-					if movie.MovieFile.ID != metadata.MovieFile.Id {
-						slog.InfoContext(ctx, "Smart Repair Guard: Movie already has a different healthy file (likely upgraded). Skipping repair.",
-							"movie", movie.Title,
-							"old_file_id", metadata.MovieFile.Id,
-							"new_file_id", movie.MovieFile.ID)
-						return model.ErrEpisodeAlreadySatisfied
-					}
-					targetMovieFileID = movie.MovieFile.ID
-				}
-				break
-			}
-		}
+	// Resolve which movie owns this file (read-only). The resolver runs the same
+	// id → tmdb → path → tmdbId-fallback cascade the repair flow relies on, but
+	// performs no destructive actions; we layer those on below.
+	own, err := m.resolveRadarrOwnership(ctx, client, filePath, relativePath, instanceName, metadata)
+	if err != nil {
+		return err
+	}
+	if own.alreadySatisfied {
+		slog.InfoContext(ctx, "Smart Repair Guard: Movie already satisfied by a different file. Skipping repair.",
+			"instance", instanceName, "file_path", filePath)
+		return model.ErrEpisodeAlreadySatisfied
 	}
 
-	// Fallback to path-based guessing if ID-based precision failed or metadata was missing
-	if targetMovie == nil {
-		slog.DebugContext(ctx, "Falling back to path-based guessing for Radarr", "file_path", filePath)
-		// Get all movies to find the one with matching file path
-		movies, err := m.data.GetMovies(ctx, client, instanceName)
-		if err != nil {
-			return fmt.Errorf("failed to get movies from Radarr: %w", err)
-		}
-
-		for _, movie := range movies {
-			// Try match by filename (the most robust way if paths differ)
-			requestFileName := filepath.Base(filePath)
-
-			if movie.HasFile && movie.MovieFile != nil {
-				// Try exact match
-				if movie.MovieFile.Path == filePath {
-					targetMovie = movie
-					targetMovieFileID = movie.MovieFile.ID
-					break
-				}
-
-				movieFileName := filepath.Base(movie.MovieFile.Path)
-				if movieFileName == requestFileName {
-					slog.InfoContext(ctx, "Found Radarr movie match by filename",
-						"movie", movie.Title,
-						"path", movie.MovieFile.Path)
-					targetMovie = movie
-					targetMovieFileID = movie.MovieFile.ID
-					break
-				}
-
-				// Try match without .strm extension if filePath is a .strm file
-				if before, ok := strings.CutSuffix(filePath, ".strm"); ok {
-					strippedPath := before
-					// Check if movie file path (without its own extension) matches stripped filePath
-					if strings.TrimSuffix(movie.MovieFile.Path, filepath.Ext(movie.MovieFile.Path)) == strippedPath {
-						targetMovie = movie
-						targetMovieFileID = movie.MovieFile.ID
-						break
-					}
-				}
-				// Try suffix match with relative path if provided
-				if relativePath != "" {
-					strippedRelative := strings.TrimSuffix(relativePath, ".strm")
-					if strings.HasSuffix(movie.MovieFile.Path, relativePath) ||
-						strings.HasSuffix(strings.TrimSuffix(movie.MovieFile.Path, filepath.Ext(movie.MovieFile.Path)), strippedRelative) {
-						slog.InfoContext(ctx, "Found Radarr movie match by relative path suffix",
-							"radarr_path", movie.MovieFile.Path,
-							"relative_path", relativePath)
-						targetMovie = movie
-						targetMovieFileID = movie.MovieFile.ID
-						break
-					}
-				}
-			}
-		}
-	}
+	targetMovie := own.movie
+	targetMovieFileID := own.movieFileID
 
 	if targetMovie == nil {
 		slog.WarnContext(ctx, "No movie found with matching file path or ID in Radarr library, attempting queue-based failure",
@@ -711,6 +635,35 @@ func (m *Manager) triggerRadarrRescanByPath(ctx context.Context, client *radarr.
 	return nil
 }
 
+// parseSonarrSeasonEpisode extracts a single season/episode pair from a file
+// path's SxxExx token. It returns ok=false for daily (date-based) episodes,
+// anime absolute numbering (no SxxExx token), and multi-episode files — those
+// need richer handling than a single season/episode pair can safely provide and
+// are intentionally left for manual repair.
+func parseSonarrSeasonEpisode(path string) (season, episode int, ok bool) {
+	name := filepath.Base(path)
+	if tvMultiEpisodePattern.MatchString(name) {
+		return 0, 0, false
+	}
+
+	matches := tvSeasonPattern.FindStringSubmatch(name)
+	if len(matches) < 3 {
+		return 0, 0, false
+	}
+
+	season, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0, 0, false
+	}
+
+	episode, err = strconv.Atoi(matches[2])
+	if err != nil {
+		return 0, 0, false
+	}
+
+	return season, episode, true
+}
+
 // triggerSonarrRescanByPath triggers a rescan in Sonarr for the given file path
 func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.Sonarr, filePath, relativePath, instanceName string, metadata *model.WebhookMetadata) error {
 	slog.InfoContext(ctx, "Searching Sonarr for matching series",
@@ -718,131 +671,31 @@ func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.
 		"file_path", filePath,
 		"relative_path", relativePath)
 
-	var targetSeriesID int64
-	var targetSeriesTitle string
-	var targetEpisodeFileID int64
-	var err error
-
-	// ID-Based Precision: If we have exact IDs from metadata, use them
-	if metadata != nil && metadata.Series != nil && metadata.EpisodeFile != nil && metadata.Series.Id > 0 && metadata.EpisodeFile.Id > 0 {
-		slog.InfoContext(ctx, "ID-Based Precision: Using metadata IDs for Sonarr repair",
-			"series_id", metadata.Series.Id,
-			"episode_file_id", metadata.EpisodeFile.Id)
-
-		targetSeriesID = metadata.Series.Id
-		targetEpisodeFileID = metadata.EpisodeFile.Id
-		targetSeriesTitle = "Known Series (ID Based)" // Title is just for logging
+	// Resolve which series + episode file own this file (read-only). The resolver
+	// runs the same id-based then path-based cascade used by repair, without any
+	// destructive actions; the queue-based failure and delete/search are layered
+	// on below.
+	own, err := m.resolveSonarrOwnership(ctx, client, filePath, relativePath, instanceName, metadata)
+	if err != nil {
+		return err
 	}
 
-	// Fallback to path-based guessing if ID-based precision failed or metadata was missing
-	if targetSeriesID == 0 {
-		slog.DebugContext(ctx, "Falling back to path-based guessing for Sonarr", "file_path", filePath)
+	if own.seriesID == 0 {
+		slog.WarnContext(ctx, "No series found in Sonarr matching file path in library, attempting queue-based failure",
+			"instance", instanceName,
+			"file_path", filePath)
 
-		// Get library directory from health config
-		libraryDir := m.configGetter().MountPath
-		cfg := m.configGetter()
-		if cfg.Health.LibraryDir != nil && *cfg.Health.LibraryDir != "" {
-			libraryDir = *cfg.Health.LibraryDir
+		// Fallback: search in Sonarr download queue for active/stuck imports
+		if err := m.failSonarrQueueItemByPath(ctx, client, filePath); err == nil {
+			return nil
 		}
 
-		slog.DebugContext(ctx, "Searching Sonarr for matching series by path",
-			"library_dir", libraryDir)
-
-		// Get all series to find the one that contains this file path
-		series, err := m.data.GetSeries(ctx, client, instanceName)
-		if err != nil {
-			return fmt.Errorf("failed to get series from Sonarr: %w", err)
-		}
-
-		// Find the series that contains this file path
-		var targetSeries *sonarr.Series
-		for _, show := range series {
-			if strings.Contains(filePath, show.Path) {
-				targetSeries = show
-				break
-			}
-		}
-
-		if targetSeries == nil {
-			// Fallback search for series using relative path
-			for _, show := range series {
-				showFolderName := filepath.Base(show.Path)
-				if strings.Contains(relativePath, showFolderName) {
-					slog.InfoContext(ctx, "Found series match by folder name", "series", show.Title, "folder", showFolderName)
-					targetSeries = show
-					break
-				}
-			}
-		}
-
-		if targetSeries == nil {
-			slog.WarnContext(ctx, "No series found in Sonarr matching file path in library, attempting queue-based failure",
-				"instance", instanceName,
-				"file_path", filePath)
-
-			// Fallback: search in Sonarr download queue for active/stuck imports
-			if err := m.failSonarrQueueItemByPath(ctx, client, filePath); err == nil {
-				return nil
-			}
-
-			return fmt.Errorf("no series found containing file path in library or queue: %s: %w", filePath, model.ErrPathMatchFailed)
-		}
-
-		targetSeriesID = targetSeries.ID
-		targetSeriesTitle = targetSeries.Title
-
-		slog.InfoContext(ctx, "Found matching series, searching for episode file",
-			"series_title", targetSeriesTitle,
-			"series_path", targetSeries.Path)
-
-		// Get episode files for this series to find the matching file
-		episodeFiles, err := m.data.GetEpisodeFiles(ctx, client, instanceName, targetSeriesID)
-		if err != nil {
-			return fmt.Errorf("failed to get episode files for series %s: %w", targetSeriesTitle, err)
-		}
-
-		// Find the episode file with matching path
-		var targetEpisodeFile *sonarr.EpisodeFile
-		for _, episodeFile := range episodeFiles {
-			if episodeFile.Path == filePath {
-				targetEpisodeFile = episodeFile
-				break
-			}
-
-			// Try match by filename
-			if filepath.Base(episodeFile.Path) == filepath.Base(filePath) {
-				slog.InfoContext(ctx, "Found Sonarr episode match by filename", "path", episodeFile.Path)
-				targetEpisodeFile = episodeFile
-				break
-			}
-
-			// Try match without .strm extension
-			if before, ok := strings.CutSuffix(filePath, ".strm"); ok {
-				strippedPath := before
-				if strings.TrimSuffix(episodeFile.Path, filepath.Ext(episodeFile.Path)) == strippedPath {
-					targetEpisodeFile = episodeFile
-					break
-				}
-			}
-
-			// Try match with relative path
-			if relativePath != "" {
-				strippedRelative := strings.TrimSuffix(relativePath, ".strm")
-				if strings.HasSuffix(episodeFile.Path, relativePath) ||
-					strings.HasSuffix(strings.TrimSuffix(episodeFile.Path, filepath.Ext(episodeFile.Path)), strippedRelative) {
-					slog.InfoContext(ctx, "Found Sonarr episode match by relative path suffix",
-						"sonarr_path", episodeFile.Path,
-						"relative_path", relativePath)
-					targetEpisodeFile = episodeFile
-					break
-				}
-			}
-		}
-
-		if targetEpisodeFile != nil {
-			targetEpisodeFileID = targetEpisodeFile.ID
-		}
+		return fmt.Errorf("no series found containing file path in library or queue: %s: %w", filePath, model.ErrPathMatchFailed)
 	}
+
+	targetSeriesID := own.seriesID
+	targetSeriesTitle := own.seriesTitle
+	targetEpisodeFileID := own.episodeFileID
 
 	var episodeIDs []int64
 
@@ -872,7 +725,7 @@ func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.
 			episodeFiles, err := m.data.GetEpisodeFiles(ctx, client, instanceName, targetSeriesID)
 			if err == nil {
 				for _, ef := range episodeFiles {
-					if ef.Path == filePath || (metadata != nil && ef.SceneName == metadata.EpisodeFile.SceneName) {
+					if ef.Path == filePath || (metadata != nil && metadata.EpisodeFile != nil && ef.SceneName == metadata.EpisodeFile.SceneName) {
 						slog.InfoContext(ctx, "Smart Repair Guard: Episode already has a different healthy file (likely upgraded). Skipping repair.",
 							"old_file_id", targetEpisodeFileID,
 							"new_file_id", ef.ID)
@@ -909,6 +762,82 @@ func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.
 		// Fallback: search in Sonarr download queue
 		if err := m.failSonarrQueueItemByPath(ctx, client, filePath); err == nil {
 			return nil
+		}
+	}
+
+	// Season/Episode fallback: when neither the metadata EpisodeFile.Id nor the
+	// path/filename matched a file record (both go stale on a Sonarr rename or
+	// re-import), fall back to the stable SeasonNumber+EpisodeNumber parsed from
+	// the path against the already-fetched episodes list. This recovers the
+	// common case where Sonarr still owns the episode (HasFile=true) but the file
+	// record no longer lines up with our stored path, which otherwise dead-ends in
+	// ErrPathMatchFailed and a permanently corrupted record. Dailies, anime
+	// absolute numbering, and multi-episode files are deliberately left unmatched.
+	if len(episodeIDs) == 0 {
+		season, episode, ok := parseSonarrSeasonEpisode(filePath)
+		if !ok && relativePath != "" {
+			season, episode, ok = parseSonarrSeasonEpisode(relativePath)
+		}
+
+		if ok {
+			for _, ep := range episodes {
+				if ep.SeasonNumber != season || ep.EpisodeNumber != episode {
+					continue
+				}
+
+				slog.InfoContext(ctx, "Found Sonarr episode by season/episode fallback",
+					"series_title", targetSeriesTitle,
+					"season", season,
+					"episode", episode,
+					"has_file", ep.HasFile,
+					"episode_file_id", ep.EpisodeFileID)
+
+				// Smart Repair Guard (season/episode fallback): when metadata told us
+				// the exact episode-file id that was reported corrupted and the episode
+				// now points at a DIFFERENT file, that file is a healthy replacement
+				// (an upgrade or re-import), not the corrupted one. Deleting it would
+				// destroy a good copy, so treat the episode as already satisfied and
+				// skip the destructive repair. If the ids are equal the episode still
+				// holds the original corrupted record (e.g. renamed in place), so we
+				// fall through and proceed with the delete below.
+				if metadata != nil && metadata.EpisodeFile != nil && metadata.EpisodeFile.Id > 0 &&
+					ep.EpisodeFileID != metadata.EpisodeFile.Id {
+					slog.InfoContext(ctx, "Smart Repair Guard: Sonarr episode now has a different file than the one reported corrupted (likely upgraded). Skipping fallback delete.",
+						"series_title", targetSeriesTitle,
+						"season", season,
+						"episode", episode,
+						"reported_file_id", metadata.EpisodeFile.Id,
+						"current_file_id", ep.EpisodeFileID)
+					return model.ErrEpisodeAlreadySatisfied
+				}
+
+				// If Sonarr still owns a (dead) file for this episode, blocklist the
+				// release and delete the stale file record before re-searching.
+				//
+				// Safety: the guard above already bailed whenever metadata gave us the
+				// corrupted episode-file id and the episode now points at a different
+				// (replacement) file. So the delete below only runs when we had no
+				// reported file id to compare against — a pure path/scene fallback —
+				// where we trust the stable SeasonNumber+EpisodeNumber parsed from the
+				// path. The common case is a Sonarr rename that left the stored path
+				// stale; dailies, anime absolute numbering, and multi-episode files are
+				// deliberately left unmatched upstream.
+				if ep.HasFile && ep.EpisodeFileID > 0 {
+					if err := m.blocklistSonarrEpisodeFile(ctx, client, targetSeriesID, ep.EpisodeFileID); err != nil {
+						slog.WarnContext(ctx, "Failed to blocklist Sonarr release", "error", err)
+					}
+
+					if err := client.DeleteEpisodeFileContext(ctx, ep.EpisodeFileID); err != nil {
+						slog.WarnContext(ctx, "Failed to delete episode file from Sonarr, continuing with search",
+							"instance", instanceName,
+							"episode_file_id", ep.EpisodeFileID,
+							"error", err)
+					}
+				}
+
+				episodeIDs = append(episodeIDs, ep.ID)
+				break
+			}
 		}
 	}
 

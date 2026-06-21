@@ -365,24 +365,44 @@ type RepairConfig struct {
 	ExponentialBackoff *bool `yaml:"exponential_backoff" mapstructure:"exponential_backoff" json:"exponential_backoff,omitempty"`
 }
 
+// CorruptedTriageConfig controls the corrupted-file auto-delete triage. Triage
+// soft-deletes the AltMount bookkeeping (health row + .meta) for corrupted
+// files that no *arr will repair — never the library file and never an arr's
+// only copy. It is disabled by default.
+type CorruptedTriageConfig struct {
+	// Enabled turns the triage on. Disabled by default; surfacing the block in
+	// the config does NOT enable it.
+	Enabled *bool `yaml:"enabled" mapstructure:"enabled" json:"enabled,omitempty"`
+	// MaxDeletesPerRun caps how many records a single triage run may soft-delete.
+	MaxDeletesPerRun int `yaml:"max_deletes_per_run" mapstructure:"max_deletes_per_run" json:"max_deletes_per_run,omitempty"`
+	// MassEventThreshold aborts a sweep run entirely when the number of triage
+	// candidates exceeds it, so a mass-corruption event (e.g. provider outage)
+	// cannot trigger mass deletion.
+	MassEventThreshold int `yaml:"mass_event_threshold" mapstructure:"mass_event_threshold" json:"mass_event_threshold,omitempty"`
+	// BackstopIntervalMinutes is the base cadence of the adaptive backstop sweep
+	// that catches records the event-driven triggers missed.
+	BackstopIntervalMinutes int `yaml:"backstop_interval_minutes" mapstructure:"backstop_interval_minutes" json:"backstop_interval_minutes,omitempty"`
+}
+
 // HealthConfig represents health checker configuration
 type HealthConfig struct {
-	Enabled                             *bool        `yaml:"enabled" mapstructure:"enabled" json:"enabled,omitempty"`
-	LibraryDir                          *string      `yaml:"library_dir" mapstructure:"library_dir" json:"library_dir,omitempty"`
-	CleanupOrphanedMetadata             *bool        `yaml:"cleanup_orphaned_metadata" mapstructure:"cleanup_orphaned_metadata" json:"cleanup_orphaned_metadata,omitempty"`
-	CheckIntervalSeconds                int          `yaml:"check_interval_seconds" mapstructure:"check_interval_seconds" json:"check_interval_seconds,omitempty"`
-	MaxConnectionsForHealthChecks       int          `yaml:"max_connections_for_health_checks" mapstructure:"max_connections_for_health_checks" json:"max_connections_for_health_checks,omitempty"`
-	MaxConcurrentJobs                   int          `yaml:"max_concurrent_jobs" mapstructure:"max_concurrent_jobs" json:"max_concurrent_jobs,omitempty"`
-	SegmentSamplePercentage             int          `yaml:"segment_sample_percentage" mapstructure:"segment_sample_percentage" json:"segment_sample_percentage,omitempty"`
-	MaxRetries                          int          `yaml:"max_retries" mapstructure:"max_retries" json:"max_retries"`
-	LibrarySyncIntervalMinutes          int          `yaml:"library_sync_interval_minutes" mapstructure:"library_sync_interval_minutes" json:"library_sync_interval_minutes,omitempty"`
-	LibrarySyncConcurrency              int          `yaml:"library_sync_concurrency" mapstructure:"library_sync_concurrency" json:"library_sync_concurrency,omitempty"`
-	ResolveRepairOnImport               *bool        `yaml:"resolve_repair_on_import" mapstructure:"resolve_repair_on_import" json:"resolve_repair_on_import,omitempty"`
-	VerifyData                          *bool        `yaml:"verify_data" mapstructure:"verify_data" json:"verify_data,omitempty"`
-	CheckAllSegments                    *bool        `yaml:"check_all_segments" mapstructure:"check_all_segments" json:"check_all_segments,omitempty"`
-	ReadTimeoutSeconds                  int          `yaml:"read_timeout_seconds" mapstructure:"read_timeout_seconds" json:"read_timeout_seconds,omitempty"`
-	AcceptableMissingSegmentsPercentage float64      `yaml:"acceptable_missing_segments_percentage" mapstructure:"acceptable_missing_segments_percentage" json:"acceptable_missing_segments_percentage,omitempty"`
-	Repair                              RepairConfig `yaml:"repair" mapstructure:"repair" json:"repair"`
+	Enabled                             *bool                 `yaml:"enabled" mapstructure:"enabled" json:"enabled,omitempty"`
+	LibraryDir                          *string               `yaml:"library_dir" mapstructure:"library_dir" json:"library_dir,omitempty"`
+	CleanupOrphanedMetadata             *bool                 `yaml:"cleanup_orphaned_metadata" mapstructure:"cleanup_orphaned_metadata" json:"cleanup_orphaned_metadata,omitempty"`
+	CheckIntervalSeconds                int                   `yaml:"check_interval_seconds" mapstructure:"check_interval_seconds" json:"check_interval_seconds,omitempty"`
+	MaxConnectionsForHealthChecks       int                   `yaml:"max_connections_for_health_checks" mapstructure:"max_connections_for_health_checks" json:"max_connections_for_health_checks,omitempty"`
+	MaxConcurrentJobs                   int                   `yaml:"max_concurrent_jobs" mapstructure:"max_concurrent_jobs" json:"max_concurrent_jobs,omitempty"`
+	SegmentSamplePercentage             int                   `yaml:"segment_sample_percentage" mapstructure:"segment_sample_percentage" json:"segment_sample_percentage,omitempty"`
+	MaxRetries                          int                   `yaml:"max_retries" mapstructure:"max_retries" json:"max_retries"`
+	LibrarySyncIntervalMinutes          int                   `yaml:"library_sync_interval_minutes" mapstructure:"library_sync_interval_minutes" json:"library_sync_interval_minutes,omitempty"`
+	LibrarySyncConcurrency              int                   `yaml:"library_sync_concurrency" mapstructure:"library_sync_concurrency" json:"library_sync_concurrency,omitempty"`
+	ResolveRepairOnImport               *bool                 `yaml:"resolve_repair_on_import" mapstructure:"resolve_repair_on_import" json:"resolve_repair_on_import,omitempty"`
+	VerifyData                          *bool                 `yaml:"verify_data" mapstructure:"verify_data" json:"verify_data,omitempty"`
+	CheckAllSegments                    *bool                 `yaml:"check_all_segments" mapstructure:"check_all_segments" json:"check_all_segments,omitempty"`
+	ReadTimeoutSeconds                  int                   `yaml:"read_timeout_seconds" mapstructure:"read_timeout_seconds" json:"read_timeout_seconds,omitempty"`
+	AcceptableMissingSegmentsPercentage float64               `yaml:"acceptable_missing_segments_percentage" mapstructure:"acceptable_missing_segments_percentage" json:"acceptable_missing_segments_percentage,omitempty"`
+	Repair                              RepairConfig          `yaml:"repair" mapstructure:"repair" json:"repair"`
+	CorruptedTriage                     CorruptedTriageConfig `yaml:"corrupted_triage" mapstructure:"corrupted_triage" json:"corrupted_triage"`
 }
 
 // Path validation functions have been moved to internal/utils/path.go
@@ -1380,6 +1400,9 @@ func (m *Manager) ReloadConfig() error {
 	// Migrate: fold legacy stuck/allowlist cleanup config into the unified rules.
 	migrateArrsCleanup(config)
 
+	// Ensure the corrupted-file triage block has sane (disabled) defaults on reload.
+	ensureCorruptedTriageDefaults(config)
+
 	// Validate configuration
 	if err := config.Validate(); err != nil {
 		return fmt.Errorf("config validation failed: %w", err)
@@ -1469,6 +1492,7 @@ func DefaultConfig(configDir ...string) *Config {
 	failureMaskingEnabled := false
 	repairEnabled := true
 	repairExponentialBackoff := true
+	corruptedTriageEnabled := false // Corrupted-file auto-delete triage disabled by default
 
 	// Set paths based on whether we're running in Docker or have a specific config directory
 	var dbPath, metadataPath, logPath, rclonePath, cachePath, backupPath string
@@ -1629,6 +1653,12 @@ func DefaultConfig(configDir ...string) *Config {
 				MaxCoolDownHours:   24,
 				ExponentialBackoff: &repairExponentialBackoff,
 			},
+			CorruptedTriage: CorruptedTriageConfig{
+				Enabled:                 &corruptedTriageEnabled, // Disabled by default
+				MaxDeletesPerRun:        50,
+				MassEventThreshold:      500,
+				BackstopIntervalMinutes: 360, // Base cadence: every 6 hours
+			},
 		},
 		SABnzbd: SABnzbdConfig{
 			Enabled:               &sabnzbdEnabled,
@@ -1679,7 +1709,7 @@ func DefaultConfig(configDir ...string) *Config {
 			ReadarrInstances:               []ArrsInstanceConfig{},
 			WhisparrInstances:              []ArrsInstanceConfig{},
 			SportarrInstances:              []ArrsInstanceConfig{},
-			QueueCleanupGracePeriodMinutes: 5,     // Default to 5 minutes stuck before acting
+			QueueCleanupGracePeriodMinutes: 5, // Default to 5 minutes stuck before acting
 			QueueCleanupMaxFailures:        0, // Failure circuit breaker disabled by default
 			// Rule table modeled on wArrden's queue cleanup. Action decides what to do:
 			// blocklist_search (bad release → block + re-search), blocklist (block but
@@ -1771,6 +1801,28 @@ func SaveToFile(config *Config, filename string) error {
 	return nil
 }
 
+// ensureCorruptedTriageDefaults fills any missing corrupted_triage values in
+// memory (leaving Enabled non-nil and false when unset), mirroring how other
+// config sections are defaulted at load. It never writes to disk: the block is
+// persisted only by the normal save path (UpdateConfig -> SaveConfig), the same
+// as every other config value.
+func ensureCorruptedTriageDefaults(config *Config) {
+	ct := &config.Health.CorruptedTriage
+	if ct.Enabled == nil {
+		disabled := false
+		ct.Enabled = &disabled
+	}
+	if ct.MaxDeletesPerRun == 0 {
+		ct.MaxDeletesPerRun = 50
+	}
+	if ct.MassEventThreshold == 0 {
+		ct.MassEventThreshold = 500
+	}
+	if ct.BackstopIntervalMinutes == 0 {
+		ct.BackstopIntervalMinutes = 360
+	}
+}
+
 // LoadConfig loads configuration from file and merges with defaults
 func LoadConfig(configFile string) (*Config, error) {
 	config := DefaultConfig()
@@ -1840,6 +1892,11 @@ func LoadConfig(configFile string) (*Config, error) {
 
 	// Migrate: fold legacy stuck/allowlist cleanup config into the unified rules.
 	migrateArrsCleanup(config)
+
+	// Fill corrupted_triage defaults in memory (same as the other defaults above).
+	// The block is written to disk only by the normal save path, not rewritten
+	// into an existing file here at load time.
+	ensureCorruptedTriageDefaults(config)
 
 	// If log file was not explicitly set in the config file and we have a specific config file path,
 	// derive log file path from config file location

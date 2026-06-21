@@ -49,7 +49,11 @@ func (m *Manager) EnsureWebhookRegistration(ctx context.Context, altmountURL str
 	webhookName := "AltMount Webhook"
 	webhookURL := fmt.Sprintf("%s/api/arrs/webhook?apikey=%s", altmountURL, apiKey)
 
-	slog.InfoContext(ctx, "Ensuring webhook registration in ARR instances", "webhook_url", webhookURL)
+	// Redact the apikey before logging so the secret never lands in logs. The
+	// real webhookURL above (with the live apikey) is still what gets registered
+	// with the ARR instances.
+	redactedWebhookURL := fmt.Sprintf("%s/api/arrs/webhook?apikey=***", altmountURL)
+	slog.InfoContext(ctx, "Ensuring webhook registration in ARR instances", "webhook_url", redactedWebhookURL)
 
 	for _, instance := range allInstances {
 		if !instance.Enabled {

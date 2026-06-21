@@ -16,6 +16,7 @@ import (
 	"github.com/javi11/altmount/internal/arrs/model"
 	"github.com/javi11/altmount/internal/config"
 	"github.com/javi11/altmount/internal/database"
+	"github.com/javi11/altmount/internal/health/triage"
 	"github.com/javi11/altmount/internal/importer"
 	"github.com/javi11/altmount/internal/metadata"
 	metapb "github.com/javi11/altmount/internal/metadata/proto"
@@ -28,6 +29,7 @@ import (
 type ARRsRepairService interface {
 	TriggerFileRescan(ctx context.Context, pathForRescan string, relativePath string, metadataStr *string) error
 	DiscoverFileMetadata(ctx context.Context, filePath, relativePath, nzbName, libraryPath string) (*model.WebhookMetadata, error)
+	ResolveOwnership(ctx context.Context, filePath, relativePath string, metadata *model.WebhookMetadata) model.Ownership
 }
 
 // WorkerStatus represents the current status of the health worker
@@ -64,6 +66,7 @@ type HealthWorker struct {
 	importerService     importer.ImportService
 	configGetter        config.ConfigGetter
 	progressBroadcaster *progress.ProgressBroadcaster // optional, may be nil
+	triage              *triage.Service               // corrupted-file auto-delete triage (no-op until enabled)
 
 	// Worker state
 	status       WorkerStatus
@@ -92,7 +95,7 @@ func NewHealthWorker(
 	configGetter config.ConfigGetter,
 	broadcaster *progress.ProgressBroadcaster,
 ) *HealthWorker {
-	return &HealthWorker{
+	hw := &HealthWorker{
 		healthChecker:       healthChecker,
 		healthRepo:          healthRepo,
 		metadataService:     metadataService,
@@ -107,6 +110,23 @@ func NewHealthWorker(
 			Status: WorkerStatusStopped,
 		},
 	}
+
+	// Corrupted-file auto-delete triage. Always constructed; it is a no-op until
+	// enabled in config. Reuses the worker's repo/metadata/arrs dependencies.
+	hw.triage = triage.NewService(
+		configGetter,
+		triage.NewHealthStore(healthRepo),
+		triage.NewMetaStore(metadataService, configGetter),
+		triage.NewOwnershipResolver(arrsService, configGetter),
+	)
+
+	return hw
+}
+
+// Triage exposes the corrupted-file triage service so other components (e.g. the
+// arr webhook handler) can hand files off to it.
+func (hw *HealthWorker) Triage() *triage.Service {
+	return hw.triage
 }
 
 // broadcastHealthChanged notifies SSE subscribers that health state has changed.
@@ -154,6 +174,11 @@ func (hw *HealthWorker) Start(ctx context.Context) error {
 		hw.run(ctx)
 	})
 
+	// Start the adaptive corrupted-file triage backstop sweep.
+	hw.wg.Go(func() {
+		hw.runTriageBackstop(ctx)
+	})
+
 	hw.status = WorkerStatusRunning
 	hw.updateStats(func(s *WorkerStats) {
 		s.Status = WorkerStatusRunning
@@ -193,6 +218,44 @@ func (hw *HealthWorker) Stop(ctx context.Context) error {
 
 	slog.InfoContext(ctx, "Health worker stopped")
 	return nil
+}
+
+// runTriageBackstop runs the adaptive corrupted-file triage backstop. It sweeps
+// the corrupted records on an interval that adapts to the previous run (sooner
+// when there was work, easing off when clean, backing off hard after a
+// mass-event abort). Each sweep is a no-op while triage is disabled.
+func (hw *HealthWorker) runTriageBackstop(ctx context.Context) {
+	timer := time.NewTimer(hw.configGetter().GetCorruptedTriageBackstopInterval())
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-hw.stopChan:
+			return
+		case <-timer.C:
+			next := hw.configGetter().GetCorruptedTriageBackstopInterval()
+			// Isolate each sweep: a panic before triage.Run's per-item recovery
+			// (e.g. in the list query or config access) must not kill the loop.
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.ErrorContext(ctx, "Corrupted triage backstop sweep recovered from panic", "panic", r)
+					}
+				}()
+				if hw.triage != nil && hw.triage.Enabled() {
+					st, err := hw.triage.Sweep(ctx)
+					if err != nil {
+						slog.ErrorContext(ctx, "Corrupted triage backstop sweep failed", "error", err)
+					} else {
+						next = triage.AdaptiveInterval(hw.configGetter().GetCorruptedTriageBackstopInterval(), st)
+					}
+				}
+			}()
+			timer.Reset(next)
+		}
+	}
 }
 
 // IsRunning returns whether the health worker is currently running
@@ -678,6 +741,12 @@ func (hw *HealthWorker) performDirectCheck(ctx context.Context, filePath string)
 			return fmt.Errorf("failed to update health status: %w", err)
 		}
 		hw.broadcastHealthChanged()
+
+		// Enter-corrupted kick: a direct check that just landed on corrupted is
+		// handed to triage immediately (no-op unless enabled).
+		if updatePtr.Status == database.HealthStatusCorrupted && hw.triage != nil {
+			hw.triage.ProcessItem(ctx, fh, triage.SourceEnterCorrupted)
+		}
 	}
 
 	// Notify rclone VFS about the status change
@@ -773,6 +842,7 @@ func (hw *HealthWorker) runHealthCheckCycle(ctx context.Context) error {
 	// Process files in parallel with bounded concurrency
 	p := pool.New().WithMaxGoroutines(maxJobs)
 	var results []database.HealthStatusUpdate
+	var newlyCorrupted []*database.FileHealth // files that became corrupted this cycle (for the triage kick)
 	var resultsMu sync.Mutex
 
 	// The regular-check writes are based on the record being 'checking' (set just above);
@@ -800,6 +870,9 @@ func (hw *HealthWorker) runHealthCheckCycle(ctx context.Context) error {
 
 			resultsMu.Lock()
 			results = append(results, *updatePtr)
+			if updatePtr.Status == database.HealthStatusCorrupted {
+				newlyCorrupted = append(newlyCorrupted, fh)
+			}
 			resultsMu.Unlock()
 
 			// Notify VFS
@@ -854,6 +927,9 @@ func (hw *HealthWorker) runHealthCheckCycle(ctx context.Context) error {
 
 			resultsMu.Lock()
 			results = append(results, *updatePtr)
+			if updatePtr.Status == database.HealthStatusCorrupted {
+				newlyCorrupted = append(newlyCorrupted, fh)
+			}
 			resultsMu.Unlock()
 
 			// Update cycle progress stats
@@ -891,6 +967,13 @@ func (hw *HealthWorker) runHealthCheckCycle(ctx context.Context) error {
 			slog.ErrorContext(ctx, "Failed to perform bulk health status update", "error", err)
 		}
 		hw.broadcastHealthChanged()
+	}
+
+	// Enter-corrupted kick: evaluate files that became corrupted this cycle for
+	// triage. Run applies its own guards (mass-event abort, per-run cap, panic
+	// isolation) and is a no-op unless triage is enabled.
+	if hw.triage != nil && len(newlyCorrupted) > 0 {
+		hw.triage.Run(ctx, newlyCorrupted, triage.SourceEnterCorrupted)
 	}
 
 	// Update final stats

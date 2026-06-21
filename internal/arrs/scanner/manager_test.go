@@ -9,6 +9,88 @@ import (
 	"github.com/javi11/altmount/internal/config"
 )
 
+func TestParseSonarrSeasonEpisode(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string
+		wantSeason  int
+		wantEpisode int
+		wantOK      bool
+	}{
+		{
+			name:        "standard single episode",
+			path:        "/tv/Show/Season 01/Show.S01E05.1080p.WEB-DL.mkv",
+			wantSeason:  1,
+			wantEpisode: 5,
+			wantOK:      true,
+		},
+		{
+			name:        "standard single episode strm",
+			path:        "/tv/Show/Season 02/Show.S02E10.2160p.WEB.mkv.strm",
+			wantSeason:  2,
+			wantEpisode: 10,
+			wantOK:      true,
+		},
+		{
+			name:        "lowercase sxxexx",
+			path:        "show.s03e07.hdtv.mkv",
+			wantSeason:  3,
+			wantEpisode: 7,
+			wantOK:      true,
+		},
+		{
+			name:        "high season and episode numbers",
+			path:        "Show.S2023E145.mkv",
+			wantSeason:  2023,
+			wantEpisode: 145,
+			wantOK:      true,
+		},
+		{
+			name:   "multi-episode back to back left unmatched",
+			path:   "Show.S01E01E02.1080p.mkv",
+			wantOK: false,
+		},
+		{
+			name:   "multi-episode dashed E range left unmatched",
+			path:   "Show.S01E01-E02.1080p.mkv",
+			wantOK: false,
+		},
+		{
+			name:   "multi-episode bare range left unmatched",
+			path:   "Show.S01E01-02.mkv",
+			wantOK: false,
+		},
+		{
+			name:   "daily date-based left unmatched",
+			path:   "Show.2023.05.18.1080p.mkv",
+			wantOK: false,
+		},
+		{
+			name:   "anime absolute numbering left unmatched",
+			path:   "Show - 145 [1080p].mkv",
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			season, episode, ok := parseSonarrSeasonEpisode(tt.path)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v; want %v", ok, tt.wantOK)
+			}
+			if !tt.wantOK {
+				return
+			}
+			if season != tt.wantSeason {
+				t.Errorf("season = %d; want %d", season, tt.wantSeason)
+			}
+			if episode != tt.wantEpisode {
+				t.Errorf("episode = %d; want %d", episode, tt.wantEpisode)
+			}
+		})
+	}
+}
+
 func TestFindInstanceForFilePath_CategoryMatch(t *testing.T) {
 	enabled := true
 
