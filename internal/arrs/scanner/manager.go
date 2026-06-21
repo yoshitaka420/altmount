@@ -794,6 +794,18 @@ func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.
 
 				// If Sonarr still owns a (dead) file for this episode, blocklist the
 				// release and delete the stale file record before re-searching.
+				//
+				// Design note: path re-verification is deliberately omitted here. This
+				// fallback is only reached after id-based and path/filename matching all
+				// failed, i.e. the corrupted file's stored path no longer lines up with
+				// any Sonarr file record (the common cause is a Sonarr rename). We trust
+				// the stable SeasonNumber+EpisodeNumber parsed from the path instead and
+				// delete whatever file Sonarr currently has for that exact episode, then
+				// re-search. Edge case: if Sonarr was renamed WITHOUT a re-import and the
+				// current file is actually a healthy upgrade, this could delete that good
+				// file record (Sonarr then re-grabs it). That trade-off is accepted to
+				// recover the far more common stale-path case; revisit before adding
+				// stricter matching.
 				if ep.HasFile && ep.EpisodeFileID > 0 {
 					if err := m.blocklistSonarrEpisodeFile(ctx, client, targetSeriesID, ep.EpisodeFileID); err != nil {
 						slog.WarnContext(ctx, "Failed to blocklist Sonarr release", "error", err)

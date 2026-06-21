@@ -287,7 +287,8 @@ func (m *Manager) resolveLidarrOwnershipStatus(ctx context.Context, client *lida
 		}
 	}
 	// The dead file is gone: look for a replacement within the same album.
-	if metadata.Album != nil && metadata.Album.Id > 0 {
+	// (oldFileID>0 already implies metadata!=nil; the guard makes that local.)
+	if metadata != nil && metadata.Album != nil && metadata.Album.Id > 0 {
 		if albumFiles, aerr := client.GetTrackFilesForAlbumContext(ctx, metadata.Album.Id); aerr == nil {
 			for _, tf := range albumFiles {
 				if tf.ID > 0 && tf.ID != oldFileID {
@@ -354,7 +355,8 @@ func (m *Manager) resolveReadarrOwnershipStatus(ctx context.Context, client *rea
 		}
 	}
 	// The dead file is gone: look for a replacement of the same book.
-	if metadata.Book != nil && metadata.Book.Id > 0 {
+	// (oldFileID>0 already implies metadata!=nil; the guard makes that local.)
+	if metadata != nil && metadata.Book != nil && metadata.Book.Id > 0 {
 		if bookFiles2, berr := client.GetBookFilesForBookContext(ctx, metadata.Book.Id); berr == nil {
 			for _, bf := range bookFiles2 {
 				if bf.ID > 0 && bf.ID != oldFileID {
