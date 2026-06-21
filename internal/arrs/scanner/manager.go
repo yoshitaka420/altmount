@@ -797,9 +797,9 @@ func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.
 				// now points at a DIFFERENT file, that file is a healthy replacement
 				// (an upgrade or re-import), not the corrupted one. Deleting it would
 				// destroy a good copy, so treat the episode as already satisfied and
-				// skip the destructive repair. (If the reported file id still matched a
-				// current file we would have matched it via the id path above and never
-				// reached this fallback, so here a known id necessarily differs.)
+				// skip the destructive repair. If the ids are equal the episode still
+				// holds the original corrupted record (e.g. renamed in place), so we
+				// fall through and proceed with the delete below.
 				if metadata != nil && metadata.EpisodeFile != nil && metadata.EpisodeFile.Id > 0 &&
 					ep.EpisodeFileID != metadata.EpisodeFile.Id {
 					slog.InfoContext(ctx, "Smart Repair Guard: Sonarr episode now has a different file than the one reported corrupted (likely upgraded). Skipping fallback delete.",
