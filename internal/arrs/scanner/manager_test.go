@@ -319,3 +319,98 @@ func TestTriggerSonarrRescanByPath_FallbackDoesNotDeleteHealthyFile(t *testing.T
 		})
 	}
 }
+
+// TestTriggerSonarrRescanByPath_RelativePathFallbackRejectsSibling verifies the
+// secondary series match (folder name against the relative path) is anchored at a
+// path-component boundary. The repaired file belongs to "Showcase", but "Show" is
+// a substring of "Showcase" and is listed first, so the old strings.Contains match
+// would wrongly select "Show". The primary full-path match is forced to miss (the
+// mount prefix differs from the *arr library root) so resolution falls through to
+// the relative-path folder-name branch.
+func TestTriggerSonarrRescanByPath_RelativePathFallbackRejectsSibling(t *testing.T) {
+	var (
+		mu                  sync.Mutex
+		episodeFileSeriesID string
+		episodeSeriesID     string
+		deletedFileIDs      []string
+		searchedEpIDs       []int64
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		p := r.URL.Path
+		switch {
+		case r.Method == http.MethodDelete && strings.Contains(p, "/episodeFile/"):
+			mu.Lock()
+			deletedFileIDs = append(deletedFileIDs, p[strings.LastIndex(p, "/")+1:])
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{}`))
+		case strings.HasSuffix(p, "/series"):
+			// "Show" is a substring of "Showcase" and is listed first, so a naive
+			// substring match would grab "Show" for a Showcase file. Library roots
+			// use a /data/tv prefix that the repair path below does NOT share.
+			_, _ = w.Write([]byte(`[{"id":1,"title":"Show","path":"/data/tv/Show"},{"id":2,"title":"Showcase","path":"/data/tv/Showcase"}]`))
+		case strings.HasSuffix(p, "/episodeFile"):
+			mu.Lock()
+			episodeFileSeriesID = r.URL.Query().Get("seriesId")
+			mu.Unlock()
+			// Filename differs from the repair path so the file scan misses and the
+			// season/episode fallback (blocklist-only) handles recovery.
+			_, _ = w.Write([]byte(`[{"id":402,"seriesId":2,"path":"/data/tv/Showcase/Season 01/Showcase.S01E01.NEW.mkv"}]`))
+		case strings.HasSuffix(p, "/episode"):
+			mu.Lock()
+			episodeSeriesID = r.URL.Query().Get("seriesId")
+			mu.Unlock()
+			_, _ = w.Write([]byte(`[{"id":222,"seriesId":2,"seasonNumber":1,"episodeNumber":1,"hasFile":true,"episodeFileId":402}]`))
+		case strings.HasSuffix(p, "/queue"):
+			_, _ = w.Write([]byte(`{"page":1,"pageSize":500,"sortKey":"timeleft","sortDirection":"ascending","totalRecords":0,"records":[]}`))
+		case strings.HasSuffix(p, "/history"):
+			_, _ = w.Write([]byte(`{"page":1,"pageSize":100,"sortKey":"date","sortDirection":"descending","totalRecords":0,"records":[]}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(p, "/command"):
+			var cmd struct {
+				EpisodeIDs []int64 `json:"episodeIds"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&cmd)
+			mu.Lock()
+			searchedEpIDs = cmd.EpisodeIDs
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"id":555}`))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.String())
+			http.Error(w, "unexpected", http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{MountPath: "/mnt/lib"}
+	mgr := NewManager(func() *config.Config { return cfg }, nil, nil, data.NewManager(), nil)
+	client := sonarr.New(&starr.Config{URL: srv.URL, APIKey: "test", Client: srv.Client()})
+
+	// Repair path's mount prefix (/mnt/lib) differs from the library root
+	// (/data/tv), so the primary full-path match misses for both series and
+	// resolution falls through to the relative-path folder-name branch.
+	err := mgr.triggerSonarrRescanByPath(context.Background(), client,
+		"/mnt/lib/Showcase/Season 01/Showcase.S01E01.OLD.mkv",
+		"Showcase/Season 01/Showcase.S01E01.OLD.mkv", "sonarr1", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// The correct series ("Showcase", id 2) must be selected — never the substring
+	// sibling "Show" (id 1).
+	if episodeFileSeriesID != "2" {
+		t.Errorf("episodeFile seriesId = %q; want \"2\" (Showcase, not Show)", episodeFileSeriesID)
+	}
+	if episodeSeriesID != "2" {
+		t.Errorf("episode seriesId = %q; want \"2\" (Showcase, not Show)", episodeSeriesID)
+	}
+	if len(searchedEpIDs) != 1 || searchedEpIDs[0] != 222 {
+		t.Errorf("searched episode IDs = %v; want [222]", searchedEpIDs)
+	}
+	if len(deletedFileIDs) != 0 {
+		t.Errorf("episode file(s) deleted = %v; want none", deletedFileIDs)
+	}
+}

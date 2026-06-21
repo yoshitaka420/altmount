@@ -793,10 +793,12 @@ func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.
 		}
 
 		if targetSeries == nil {
-			// Fallback search for series using relative path
+			// Fallback search for series using relative path. Match the series
+			// folder name at a path-component boundary so a shorter name can't
+			// match inside a longer sibling (e.g. "Show" must not match "Showcase").
 			for _, show := range series {
 				showFolderName := filepath.Base(show.Path)
-				if strings.Contains(relativePath, showFolderName) {
+				if pathContainsDir(relativePath, showFolderName) {
 					slog.InfoContext(ctx, "Found series match by folder name", "series", show.Title, "folder", showFolderName)
 					targetSeries = show
 					break
