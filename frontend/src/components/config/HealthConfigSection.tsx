@@ -1,6 +1,11 @@
 import { AlertTriangle, Info, Save, TestTube } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { ConfigResponse, DryRunSyncResult, HealthConfig } from "../../types/config";
+import type {
+	ConfigResponse,
+	CorruptedTriageConfig,
+	DryRunSyncResult,
+	HealthConfig,
+} from "../../types/config";
 import { LoadingSpinner } from "../ui/LoadingSpinner";
 
 interface HealthConfigSectionProps {
@@ -94,6 +99,22 @@ export function HealthConfigSection({
 			...formData,
 			repair: {
 				...formData.repair,
+				[field]: value,
+			},
+		};
+		setFormData(newData);
+		setHasChanges(JSON.stringify(newData) !== JSON.stringify(config.health));
+		setValidationError(validateFormData(newData));
+	};
+
+	const handleTriageChange = (
+		field: keyof CorruptedTriageConfig,
+		value: boolean | number | undefined,
+	) => {
+		const newData = {
+			...formData,
+			corrupted_triage: {
+				...formData.corrupted_triage,
 				[field]: value,
 			},
 		};
@@ -283,6 +304,105 @@ export function HealthConfigSection({
 									disabled={isReadOnly}
 									onChange={(e) => handleInputChange("resolve_repair_on_import", e.target.checked)}
 								/>
+							</div>
+						</div>
+					)}
+				</div>
+
+				{/* Corrupted-File Triage */}
+				<div className="rounded-2xl border-2 border-base-300/80 bg-base-200/60 p-6">
+					<div className="flex items-start justify-between gap-4">
+						<div className="min-w-0 flex-1">
+							<h4 className="break-words font-bold text-base-content text-sm">
+								Corrupted-File Triage
+							</h4>
+							<p className="mt-1 break-words text-[11px] text-base-content/50 leading-relaxed">
+								Auto-remove the AltMount bookkeeping (health record + .meta) for corrupted files no
+								ARR will repair: removed zombies, unowned files, and files the ARR already replaced.
+								Never deletes the library file or an ARR's only copy. Ownership is resolved
+								read-only and fail-closed.
+							</p>
+						</div>
+						<input
+							type="checkbox"
+							className="toggle toggle-warning mt-1 shrink-0"
+							checked={formData.corrupted_triage?.enabled ?? false}
+							disabled={isReadOnly}
+							onChange={(e) => handleTriageChange("enabled", e.target.checked)}
+						/>
+					</div>
+
+					{formData.corrupted_triage?.enabled && (
+						<div className="fade-in slide-in-from-top-2 mt-6 animate-in border-base-300/50 border-t pt-6">
+							<div className="mb-6 flex gap-3 rounded-xl border border-warning/20 bg-warning/5 p-4">
+								<AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+								<p className="min-w-0 flex-1 break-words text-[11px] text-base-content/70 leading-relaxed">
+									This deletes records permanently. It only acts on Radarr/Sonarr-owned files and
+									skips anything it can't positively confirm is safe. Watch the logs after enabling.
+								</p>
+							</div>
+							<div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+								<fieldset className="fieldset">
+									<legend className="fieldset-legend font-semibold">Max Deletes Per Run</legend>
+									<input
+										type="number"
+										className="input input-bordered w-full bg-base-100 font-mono text-sm"
+										value={formData.corrupted_triage?.max_deletes_per_run ?? 50}
+										disabled={isReadOnly}
+										onChange={(e) =>
+											handleTriageChange(
+												"max_deletes_per_run",
+												Number.parseInt(e.target.value, 10) || 50,
+											)
+										}
+										min="1"
+									/>
+									<p className="label break-words text-[10px] text-base-content/50">
+										Cap on soft-deletes in a single triage run.
+									</p>
+								</fieldset>
+
+								<fieldset className="fieldset">
+									<legend className="fieldset-legend font-semibold">Mass-Event Threshold</legend>
+									<input
+										type="number"
+										className="input input-bordered w-full bg-base-100 font-mono text-sm"
+										value={formData.corrupted_triage?.mass_event_threshold ?? 500}
+										disabled={isReadOnly}
+										onChange={(e) =>
+											handleTriageChange(
+												"mass_event_threshold",
+												Number.parseInt(e.target.value, 10) || 500,
+											)
+										}
+										min="1"
+									/>
+									<p className="label break-words text-[10px] text-base-content/50">
+										Abort the whole run if candidates exceed this (survives mass-corruption events).
+									</p>
+								</fieldset>
+
+								<fieldset className="fieldset">
+									<legend className="fieldset-legend font-semibold">
+										Backstop Interval (Minutes)
+									</legend>
+									<input
+										type="number"
+										className="input input-bordered w-full bg-base-100 font-mono text-sm"
+										value={formData.corrupted_triage?.backstop_interval_minutes ?? 360}
+										disabled={isReadOnly}
+										onChange={(e) =>
+											handleTriageChange(
+												"backstop_interval_minutes",
+												Number.parseInt(e.target.value, 10) || 360,
+											)
+										}
+										min="1"
+									/>
+									<p className="label break-words text-[10px] text-base-content/50">
+										Base cadence of the adaptive backstop sweep.
+									</p>
+								</fieldset>
 							</div>
 						</div>
 					)}
