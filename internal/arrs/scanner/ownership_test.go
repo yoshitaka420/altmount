@@ -176,6 +176,96 @@ func TestResolveRadarrOwnership_LookupErrorFailsClosed(t *testing.T) {
 	}
 }
 
+// TestResolveRadarrOwnership_TMDBFallbackSmartRepairGuard is the regression test
+// for the stable-tmdbId fallback resolution: it must apply the same Smart Repair
+// Guard the targeted id/tmdb lookups do. The targeted TMDB lookup misses (movie
+// re-added, not yet in that response) and the full-list path scan misses, so the
+// end-of-function tmdbId fallback resolves the movie — but its current file id
+// differs from the reported corrupted one, so it is a healthy replacement and
+// must NOT be offered up for deletion.
+func TestResolveRadarrOwnership_TMDBFallbackSmartRepairGuard(t *testing.T) {
+	tmdbCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/movie") && r.URL.Query().Get("tmdbId") == "603":
+			tmdbCalls++
+			if tmdbCalls == 1 {
+				// Targeted GetMovieByTMDBID -> not found yet.
+				_, _ = w.Write([]byte(`[]`))
+				return
+			}
+			// End-of-function tmdbId fallback -> resolves a movie whose CURRENT file
+			// (900) differs from the reported corrupted file (111): a replacement.
+			_, _ = w.Write([]byte(`[{"id":7,"title":"The Matrix","tmdbId":603,"hasFile":true,"movieFile":{"id":900,"path":"/movies/matrix-2160p.mkv"}}]`))
+		case strings.HasSuffix(r.URL.Path, "/movie"):
+			// Full-list path-based scan -> no match.
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			t.Errorf("unexpected request: %s", r.URL.String())
+		}
+	}))
+	defer srv.Close()
+
+	mgr := newResolverManager(nil)
+	meta := &model.WebhookMetadata{
+		Movie:     &model.MovieMetadata{TmdbId: 603},
+		MovieFile: &model.MovieFileMetadata{Id: 111},
+	}
+
+	own, err := mgr.resolveRadarrOwnership(context.Background(), newRadarrClient(srv), "/movies/matrix.mkv", "", "radarr1", meta)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !own.alreadySatisfied {
+		t.Fatalf("expected alreadySatisfied=true (replacement detected via tmdbId fallback), got %+v", own)
+	}
+	if own.movieFileID != 0 {
+		t.Errorf("movieFileID = %d; want 0 (guard must not expose a replacement file for deletion)", own.movieFileID)
+	}
+}
+
+// TestResolveRadarrOwnership_TMDBFallbackResolvesWhenNotReplaced proves the guard
+// is targeted: when the tmdbId fallback resolves a movie that is NOT a replacement
+// (no reported corrupted file id to contradict it), it still exposes the current
+// file id for the normal repair flow.
+func TestResolveRadarrOwnership_TMDBFallbackResolvesWhenNotReplaced(t *testing.T) {
+	tmdbCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/movie") && r.URL.Query().Get("tmdbId") == "603":
+			tmdbCalls++
+			if tmdbCalls == 1 {
+				_, _ = w.Write([]byte(`[]`))
+				return
+			}
+			_, _ = w.Write([]byte(`[{"id":7,"title":"The Matrix","tmdbId":603,"hasFile":true,"movieFile":{"id":900,"path":"/movies/matrix.mkv"}}]`))
+		case strings.HasSuffix(r.URL.Path, "/movie"):
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			t.Errorf("unexpected request: %s", r.URL.String())
+		}
+	}))
+	defer srv.Close()
+
+	mgr := newResolverManager(nil)
+	// No MovieFile id reported -> nothing to contradict the resolved file.
+	meta := &model.WebhookMetadata{Movie: &model.MovieMetadata{TmdbId: 603}}
+
+	own, err := mgr.resolveRadarrOwnership(context.Background(), newRadarrClient(srv), "/movies/matrix.mkv", "", "radarr1", meta)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if own.alreadySatisfied {
+		t.Fatalf("alreadySatisfied = true; want false (no replacement evidence), got %+v", own)
+	}
+	if own.movie == nil || own.movie.ID != 7 {
+		t.Fatalf("expected movie 7 via tmdbId fallback, got %+v", own.movie)
+	}
+	if own.movieFileID != 900 {
+		t.Errorf("movieFileID = %d; want 900", own.movieFileID)
+	}
+}
+
 func TestResolveSonarrOwnership_ByID(t *testing.T) {
 	// With both series and episode-file IDs in metadata, no HTTP calls happen.
 	called := false

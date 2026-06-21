@@ -164,6 +164,19 @@ func (m *Manager) resolveRadarrOwnership(ctx context.Context, client *radarr.Rad
 		} else if len(movies) > 0 {
 			own.movie = movies[0]
 			if own.movie.HasFile && own.movie.MovieFile != nil {
+				// Smart Repair Guard (tmdbId fallback): the same upgrade/replacement
+				// check the targeted id/tmdb lookups apply above. Resolving by stable
+				// tmdbId can land on a movie whose current file is a healthy
+				// replacement of the one we were asked to repair (e.g. after a rename
+				// or re-import); deleting it downstream would destroy a good copy.
+				if metadata.MovieFile != nil && metadata.MovieFile.Id > 0 && own.movie.MovieFile.ID != metadata.MovieFile.Id {
+					slog.InfoContext(ctx, "Smart Repair Guard: Movie already has a different healthy file (likely upgraded).",
+						"movie", own.movie.Title,
+						"old_file_id", metadata.MovieFile.Id,
+						"new_file_id", own.movie.MovieFile.ID)
+					own.alreadySatisfied = true
+					return own, nil
+				}
 				own.movieFileID = own.movie.MovieFile.ID
 			}
 			slog.InfoContext(ctx, "Resolved Radarr movie by tmdbId fallback",
