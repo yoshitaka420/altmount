@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,38 +67,29 @@ func TestCorruptedTriageAccessors_Custom(t *testing.T) {
 	}
 }
 
-func TestEnsureCorruptedTriageDefaults_FillsAndReportsMissing(t *testing.T) {
-	viper.Reset()
-	defer viper.Reset()
-
+func TestEnsureCorruptedTriageDefaults_FillsDefaults(t *testing.T) {
 	cfg := &Config{}
-	missing := ensureCorruptedTriageDefaults(cfg)
-	if !missing {
-		t.Fatalf("wasMissing = false; want true (viper has no key)")
-	}
+	ensureCorruptedTriageDefaults(cfg)
+
 	if cfg.Health.CorruptedTriage.Enabled == nil || *cfg.Health.CorruptedTriage.Enabled {
 		t.Errorf("Enabled not defaulted to non-nil false")
 	}
 	if cfg.Health.CorruptedTriage.MaxDeletesPerRun != 50 {
 		t.Errorf("MaxDeletesPerRun = %d; want 50", cfg.Health.CorruptedTriage.MaxDeletesPerRun)
 	}
-}
-
-func TestEnsureCorruptedTriageDefaults_PresentNotMissing(t *testing.T) {
-	viper.Reset()
-	defer viper.Reset()
-	viper.Set("health.corrupted_triage.enabled", true)
-
-	cfg := &Config{}
-	if missing := ensureCorruptedTriageDefaults(cfg); missing {
-		t.Fatalf("wasMissing = true; want false (viper has the key)")
+	if cfg.Health.CorruptedTriage.MassEventThreshold != 500 {
+		t.Errorf("MassEventThreshold = %d; want 500", cfg.Health.CorruptedTriage.MassEventThreshold)
+	}
+	if cfg.Health.CorruptedTriage.BackstopIntervalMinutes != 360 {
+		t.Errorf("BackstopIntervalMinutes = %d; want 360", cfg.Health.CorruptedTriage.BackstopIntervalMinutes)
 	}
 }
 
-// TestLoadConfig_InjectsTriageBlockIntoExistingConfig verifies the first-run
-// injection: an existing config that predates the block gets it added (disabled)
-// and persisted back to disk.
-func TestLoadConfig_InjectsTriageBlockIntoExistingConfig(t *testing.T) {
+// TestLoadConfig_DoesNotRewriteExistingConfigForTriage verifies the block is NOT
+// written into a pre-existing config file at load time: defaults are filled in
+// memory, but the on-disk file is left untouched (the block lands on disk only
+// via a normal save, like every other config value).
+func TestLoadConfig_DoesNotRewriteExistingConfigForTriage(t *testing.T) {
 	viper.Reset()
 	defer viper.Reset()
 
@@ -123,11 +115,13 @@ func TestLoadConfig_InjectsTriageBlockIntoExistingConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal stripped: %v", err)
 	}
-	if strings.Contains(string(stripped), "corrupted_triage") {
-		t.Fatal("precondition failed: stripped config still contains corrupted_triage")
-	}
 	if err := os.WriteFile(path, stripped, 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
+	}
+
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
 	}
 
 	cfg, err := LoadConfig(path)
@@ -135,17 +129,23 @@ func TestLoadConfig_InjectsTriageBlockIntoExistingConfig(t *testing.T) {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	// The in-memory config has the block, disabled.
+	// In-memory defaults are present so the feature works.
 	if cfg.Health.CorruptedTriage.Enabled == nil || *cfg.Health.CorruptedTriage.Enabled {
 		t.Errorf("loaded triage enabled = %v; want non-nil false", cfg.Health.CorruptedTriage.Enabled)
 	}
+	if cfg.Health.CorruptedTriage.MaxDeletesPerRun != 50 {
+		t.Errorf("in-memory MaxDeletesPerRun = %d; want 50", cfg.Health.CorruptedTriage.MaxDeletesPerRun)
+	}
 
-	// The block was persisted back to disk, surfacing the option.
+	// The on-disk file must be byte-for-byte unchanged: load does not rewrite it.
 	after, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read back config: %v", err)
 	}
-	if !strings.Contains(string(after), "corrupted_triage") {
-		t.Errorf("config file was not updated with corrupted_triage block:\n%s", after)
+	if !bytes.Equal(before, after) {
+		t.Errorf("LoadConfig rewrote the existing config file; want it left untouched")
+	}
+	if strings.Contains(string(after), "corrupted_triage") {
+		t.Errorf("corrupted_triage must not be written into an existing file at load")
 	}
 }

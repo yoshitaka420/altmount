@@ -1401,7 +1401,7 @@ func (m *Manager) ReloadConfig() error {
 	migrateArrsCleanup(config)
 
 	// Ensure the corrupted-file triage block has sane (disabled) defaults on reload.
-	_ = ensureCorruptedTriageDefaults(config)
+	ensureCorruptedTriageDefaults(config)
 
 	// Validate configuration
 	if err := config.Validate(); err != nil {
@@ -1801,14 +1801,12 @@ func SaveToFile(config *Config, filename string) error {
 	return nil
 }
 
-// LoadConfig loads configuration from file and merges with defaults
-// ensureCorruptedTriageDefaults fills in any missing corrupted_triage defaults
-// (always leaving Enabled non-nil and false when unset) and reports whether the
-// block was absent from the loaded config file, so callers can decide whether to
-// persist it back to disk.
-func ensureCorruptedTriageDefaults(config *Config) (wasMissing bool) {
-	wasMissing = !viper.IsSet("health.corrupted_triage")
-
+// ensureCorruptedTriageDefaults fills any missing corrupted_triage values in
+// memory (leaving Enabled non-nil and false when unset), mirroring how other
+// config sections are defaulted at load. It never writes to disk: the block is
+// persisted only by the normal save path (UpdateConfig -> SaveConfig), the same
+// as every other config value.
+func ensureCorruptedTriageDefaults(config *Config) {
 	ct := &config.Health.CorruptedTriage
 	if ct.Enabled == nil {
 		disabled := false
@@ -1823,9 +1821,9 @@ func ensureCorruptedTriageDefaults(config *Config) (wasMissing bool) {
 	if ct.BackstopIntervalMinutes == 0 {
 		ct.BackstopIntervalMinutes = 360
 	}
-	return wasMissing
 }
 
+// LoadConfig loads configuration from file and merges with defaults
 func LoadConfig(configFile string) (*Config, error) {
 	config := DefaultConfig()
 
@@ -1895,16 +1893,10 @@ func LoadConfig(configFile string) (*Config, error) {
 	// Migrate: fold legacy stuck/allowlist cleanup config into the unified rules.
 	migrateArrsCleanup(config)
 
-	// Inject the corrupted-file triage block (disabled) into pre-existing configs
-	// that predate it, surfacing the option in the live config without enabling
-	// it. Only persists when loading from an explicit config file path.
-	if ensureCorruptedTriageDefaults(config) && configFile != "" {
-		if err := SaveToFile(config, targetConfigFile); err != nil {
-			slog.Warn("Failed to persist injected health.corrupted_triage config block", "path", targetConfigFile, "error", err)
-		} else {
-			slog.Info("Added health.corrupted_triage config block (disabled) to existing config", "path", targetConfigFile)
-		}
-	}
+	// Fill corrupted_triage defaults in memory (same as the other defaults above).
+	// The block is written to disk only by the normal save path, not rewritten
+	// into an existing file here at load time.
+	ensureCorruptedTriageDefaults(config)
 
 	// If log file was not explicitly set in the config file and we have a specific config file path,
 	// derive log file path from config file location
