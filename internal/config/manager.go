@@ -1801,11 +1801,6 @@ func SaveToFile(config *Config, filename string) error {
 	return nil
 }
 
-// LoadConfig loads configuration from file and merges with defaults
-// ensureCorruptedTriageDefaults fills in any missing corrupted_triage defaults
-// (always leaving Enabled non-nil and false when unset) and reports whether the
-// block was absent from the loaded config file, so callers can decide whether to
-// persist it back to disk.
 // ensureCorruptedTriageDefaults fills any missing corrupted_triage values in
 // memory (leaving Enabled non-nil and false when unset), mirroring how other
 // config sections are defaulted at load. It never writes to disk: the block is
@@ -1828,6 +1823,7 @@ func ensureCorruptedTriageDefaults(config *Config) {
 	}
 }
 
+// LoadConfig loads configuration from file and merges with defaults
 func LoadConfig(configFile string) (*Config, error) {
 	config := DefaultConfig()
 
