@@ -91,6 +91,10 @@ func (m *Manager) resolveRadarrOwnership(ctx context.Context, client *radarr.Rad
 			return own, fmt.Errorf("failed to get movies from Radarr: %w", err)
 		}
 
+		// weakBasenameMovie holds a filename-only match: usable to re-search but too
+		// weak to delete a file on, so a stronger path-based match wins if found.
+		var weakBasenameMovie *radarr.Movie
+
 		for _, movie := range movies {
 			requestFileName := filepath.Base(filePath)
 
@@ -101,14 +105,13 @@ func (m *Manager) resolveRadarrOwnership(ctx context.Context, client *radarr.Rad
 					break
 				}
 
-				movieFileName := filepath.Base(movie.MovieFile.Path)
-				if movieFileName == requestFileName {
-					slog.InfoContext(ctx, "Found Radarr movie match by filename",
-						"movie", movie.Title,
-						"path", movie.MovieFile.Path)
-					own.movie = movie
-					own.movieFileID = movie.MovieFile.ID
-					break
+				// Filename-only match: too weak to delete a file on (a shared basename
+				// could be a different movie, or a renamed replacement). Remember the
+				// first one as a search-only fallback but keep scanning — a stronger
+				// path-based match (.strm / relative-suffix, which carry a movieFileID)
+				// later in this loop or on a later movie must take priority.
+				if weakBasenameMovie == nil && filepath.Base(movie.MovieFile.Path) == requestFileName {
+					weakBasenameMovie = movie
 				}
 
 				if before, ok := strings.CutSuffix(filePath, ".strm"); ok {
@@ -132,6 +135,16 @@ func (m *Manager) resolveRadarrOwnership(ctx context.Context, client *radarr.Rad
 					}
 				}
 			}
+		}
+
+		// No exact / .strm / relative-suffix match: fall back to the filename-only
+		// match if one was found. movieFileID stays 0, so the repair path re-searches
+		// without deleting a file matched on basename alone.
+		if own.movie == nil && weakBasenameMovie != nil {
+			slog.InfoContext(ctx, "Found Radarr movie match by filename (search-only; too weak to delete file)",
+				"movie", weakBasenameMovie.Title,
+				"path", weakBasenameMovie.MovieFile.Path)
+			own.movie = weakBasenameMovie
 		}
 	}
 
