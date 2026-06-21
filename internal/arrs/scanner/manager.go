@@ -544,6 +544,39 @@ func (m *Manager) TriggerDownloadScan(ctx context.Context, instanceType string) 
 	}
 }
 
+// radarrFileMatchesRepairTarget reports whether a Radarr movie file path is
+// confirmed to be the file currently under repair, using path-anchored checks
+// only: exact path, .strm-stripped full path, or relative-path suffix.
+//
+// Filename-only (basename) matching is intentionally NOT included: it can match
+// a same-named healthy file at a different location (e.g. after a folder rename),
+// and using it to gate a delete risks destroying a healthy replacement. Callers
+// that need the looser basename behaviour for non-destructive movie identification
+// must opt into it explicitly.
+func radarrFileMatchesRepairTarget(moviePath, filePath, relativePath string) bool {
+	if moviePath == filePath {
+		return true
+	}
+
+	// .strm-stripped full-path match when the repair target is a .strm file.
+	if before, ok := strings.CutSuffix(filePath, ".strm"); ok {
+		if strings.TrimSuffix(moviePath, filepath.Ext(moviePath)) == before {
+			return true
+		}
+	}
+
+	// Relative-path suffix match (handles ARR-side prefixes on the same file).
+	if relativePath != "" {
+		strippedRelative := strings.TrimSuffix(relativePath, ".strm")
+		if strings.HasSuffix(moviePath, relativePath) ||
+			strings.HasSuffix(strings.TrimSuffix(moviePath, filepath.Ext(moviePath)), strippedRelative) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // triggerRadarrRescanByPath triggers a rescan in Radarr for the given file path
 func (m *Manager) triggerRadarrRescanByPath(ctx context.Context, client *radarr.Radarr, filePath, relativePath, instanceName string, metadata *model.WebhookMetadata) error {
 	slog.InfoContext(ctx, "Searching Radarr for matching movie",
@@ -594,52 +627,98 @@ func (m *Manager) triggerRadarrRescanByPath(ctx context.Context, client *radarr.
 			return fmt.Errorf("failed to get movies from Radarr: %w", err)
 		}
 
+		// First pass: path-anchored matches (exact, .strm-stripped, relative-suffix).
+		// These prove the file's location, so they take priority over a filename-only
+		// match anywhere in the library.
 		for _, movie := range movies {
-			// Try match by filename (the most robust way if paths differ)
+			if !movie.HasFile || movie.MovieFile == nil {
+				continue
+			}
+			if radarrFileMatchesRepairTarget(movie.MovieFile.Path, filePath, relativePath) {
+				slog.InfoContext(ctx, "Found Radarr movie match by anchored path",
+					"movie", movie.Title,
+					"path", movie.MovieFile.Path)
+				targetMovie = movie
+				targetMovieFileID = movie.MovieFile.ID
+				break
+			}
+		}
+
+		// Second pass: filename-only match. Bridges path-mapped libraries (Radarr and
+		// AltMount mounting the same file under different roots) where no anchored
+		// check can match. It is weaker — it can match a same-named file at a different
+		// location (e.g. after a folder rename) — so it runs only as a last resort,
+		// after every anchored check has failed for every movie.
+		if targetMovie == nil {
 			requestFileName := filepath.Base(filePath)
-
-			if movie.HasFile && movie.MovieFile != nil {
-				// Try exact match
-				if movie.MovieFile.Path == filePath {
-					targetMovie = movie
-					targetMovieFileID = movie.MovieFile.ID
-					break
+			for _, movie := range movies {
+				if !movie.HasFile || movie.MovieFile == nil {
+					continue
 				}
-
-				movieFileName := filepath.Base(movie.MovieFile.Path)
-				if movieFileName == requestFileName {
-					slog.InfoContext(ctx, "Found Radarr movie match by filename",
+				if filepath.Base(movie.MovieFile.Path) == requestFileName {
+					slog.InfoContext(ctx, "Found Radarr movie match by filename (no anchored path match)",
 						"movie", movie.Title,
 						"path", movie.MovieFile.Path)
 					targetMovie = movie
 					targetMovieFileID = movie.MovieFile.ID
 					break
 				}
+			}
+		}
+	}
 
-				// Try match without .strm extension if filePath is a .strm file
-				if before, ok := strings.CutSuffix(filePath, ".strm"); ok {
-					strippedPath := before
-					// Check if movie file path (without its own extension) matches stripped filePath
-					if strings.TrimSuffix(movie.MovieFile.Path, filepath.Ext(movie.MovieFile.Path)) == strippedPath {
-						targetMovie = movie
-						targetMovieFileID = movie.MovieFile.ID
-						break
-					}
-				}
-				// Try suffix match with relative path if provided
-				if relativePath != "" {
-					strippedRelative := strings.TrimSuffix(relativePath, ".strm")
-					if strings.HasSuffix(movie.MovieFile.Path, relativePath) ||
-						strings.HasSuffix(strings.TrimSuffix(movie.MovieFile.Path, filepath.Ext(movie.MovieFile.Path)), strippedRelative) {
-						slog.InfoContext(ctx, "Found Radarr movie match by relative path suffix",
-							"radarr_path", movie.MovieFile.Path,
-							"relative_path", relativePath)
-						targetMovie = movie
-						targetMovieFileID = movie.MovieFile.ID
-						break
-					}
+	// tmdbId fallback: the stored internal Movie.Id goes stale when a movie is
+	// removed and re-added in Radarr (the re-added movie gets a new internal id),
+	// and a rename in Radarr defeats the path-based guessing above. tmdbId is
+	// immutable across remove+re-add, so resolve the movie directly by it before
+	// giving up. The targeted lookup is fresh (the path match above runs against a
+	// 10-min cache that can lag a just-re-added movie), so re-confirm the path here
+	// and only delete the current file when it is positively the corrupt target.
+	// When the movie instead carries a file at a different path, it is a healthy
+	// replacement (or a rename we cannot prove is corrupt) and must NOT be deleted:
+	// fall through with targetMovieFileID == 0 to a non-destructive re-search.
+	if targetMovie == nil && metadata != nil && metadata.Movie != nil && metadata.Movie.TmdbId > 0 {
+		slog.InfoContext(ctx, "ID and path match failed, resolving Radarr movie by stable tmdbId",
+			"instance", instanceName,
+			"tmdb_id", metadata.Movie.TmdbId)
+
+		movies, err := client.GetMovieContext(ctx, &radarr.GetMovie{TMDBID: metadata.Movie.TmdbId})
+		if err != nil {
+			slog.WarnContext(ctx, "Failed to resolve Radarr movie by tmdbId",
+				"instance", instanceName,
+				"tmdb_id", metadata.Movie.TmdbId,
+				"error", err)
+		} else if len(movies) > 0 {
+			targetMovie = movies[0]
+
+			if targetMovie.HasFile && targetMovie.MovieFile != nil {
+				moviePath := targetMovie.MovieFile.Path
+
+				// Confirm the current file IS the corrupt target using path-anchored
+				// checks against fresh data (exact path, .strm-stripped full path, or
+				// relative-path suffix). Filename-only matching is deliberately excluded:
+				// in symlink libraries the rescan path is a real media path, so after a
+				// folder rename a same-named *healthy* replacement would pass a basename
+				// check and be wrongly deleted. The anchored checks already cover the only
+				// legitimate case here (a stale-cache miss of the re-added movie, where
+				// the fresh path matches exactly).
+				if radarrFileMatchesRepairTarget(moviePath, filePath, relativePath) {
+					targetMovieFileID = targetMovie.MovieFile.ID
+				} else {
+					slog.InfoContext(ctx, "tmdbId fallback: movie has a file at a different path (healthy replacement or rename), re-searching without deleting",
+						"instance", instanceName,
+						"movie_id", targetMovie.ID,
+						"current_file", moviePath,
+						"corrupt_target", filePath)
 				}
 			}
+
+			slog.InfoContext(ctx, "Resolved Radarr movie by tmdbId fallback",
+				"instance", instanceName,
+				"tmdb_id", metadata.Movie.TmdbId,
+				"movie_id", targetMovie.ID,
+				"movie_title", targetMovie.Title,
+				"will_delete_file", targetMovieFileID > 0)
 		}
 	}
 
