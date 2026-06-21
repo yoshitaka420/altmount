@@ -294,9 +294,12 @@ func (m *Manager) sonarrHasFile(ctx context.Context, client *sonarr.Sonarr, inst
 	strippedRelative := strings.TrimSuffix(relativePath, ".strm")
 
 	for _, series := range seriesList {
-		// Check if the series folder name is part of the relative path
+		// Check if the series folder name is part of the relative path, anchored at
+		// a path-component boundary so a shorter name can't match inside a longer
+		// sibling (e.g. "Show" must not match "Showcase") and route to the wrong
+		// instance.
 		folderName := filepath.Base(series.Path)
-		if strings.Contains(relativePath, folderName) || strings.Contains(strippedRelative, folderName) {
+		if pathContainsDir(relativePath, folderName) || pathContainsDir(strippedRelative, folderName) {
 			return true
 		}
 	}
@@ -824,7 +827,105 @@ func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.
 			return nil
 		}
 
-		return fmt.Errorf("no series found containing file path in library or queue: %s: %w", filePath, model.ErrPathMatchFailed)
+		slog.DebugContext(ctx, "Searching Sonarr for matching series by path",
+			"library_dir", libraryDir)
+
+		// Get all series to find the one that contains this file path
+		series, err := m.data.GetSeries(ctx, client, instanceName)
+		if err != nil {
+			return fmt.Errorf("failed to get series from Sonarr: %w", err)
+		}
+
+		// Find the series that contains this file path
+		var targetSeries *sonarr.Series
+		for _, show := range series {
+			if pathContainsDir(filePath, show.Path) {
+				targetSeries = show
+				break
+			}
+		}
+
+		if targetSeries == nil {
+			// Fallback search for series using relative path. Match the series
+			// folder name at a path-component boundary so a shorter name can't
+			// match inside a longer sibling (e.g. "Show" must not match "Showcase").
+			for _, show := range series {
+				showFolderName := filepath.Base(show.Path)
+				if pathContainsDir(relativePath, showFolderName) {
+					slog.InfoContext(ctx, "Found series match by folder name", "series", show.Title, "folder", showFolderName)
+					targetSeries = show
+					break
+				}
+			}
+		}
+
+		if targetSeries == nil {
+			slog.WarnContext(ctx, "No series found in Sonarr matching file path in library, attempting queue-based failure",
+				"instance", instanceName,
+				"file_path", filePath)
+
+			// Fallback: search in Sonarr download queue for active/stuck imports
+			if err := m.failSonarrQueueItemByPath(ctx, client, filePath); err == nil {
+				return nil
+			}
+
+			return fmt.Errorf("no series found containing file path in library or queue: %s: %w", filePath, model.ErrPathMatchFailed)
+		}
+
+		targetSeriesID = targetSeries.ID
+		targetSeriesTitle = targetSeries.Title
+
+		slog.InfoContext(ctx, "Found matching series, searching for episode file",
+			"series_title", targetSeriesTitle,
+			"series_path", targetSeries.Path)
+
+		// Get episode files for this series to find the matching file
+		episodeFiles, err := m.data.GetEpisodeFiles(ctx, client, instanceName, targetSeriesID)
+		if err != nil {
+			return fmt.Errorf("failed to get episode files for series %s: %w", targetSeriesTitle, err)
+		}
+
+		// Find the episode file with matching path
+		var targetEpisodeFile *sonarr.EpisodeFile
+		for _, episodeFile := range episodeFiles {
+			if episodeFile.Path == filePath {
+				targetEpisodeFile = episodeFile
+				break
+			}
+
+			// Try match by filename
+			if filepath.Base(episodeFile.Path) == filepath.Base(filePath) {
+				slog.InfoContext(ctx, "Found Sonarr episode match by filename", "path", episodeFile.Path)
+				targetEpisodeFile = episodeFile
+				break
+			}
+
+			// Try match without .strm extension
+			if before, ok := strings.CutSuffix(filePath, ".strm"); ok {
+				strippedPath := before
+				if strings.TrimSuffix(episodeFile.Path, filepath.Ext(episodeFile.Path)) == strippedPath {
+					targetEpisodeFile = episodeFile
+					break
+				}
+			}
+
+			// Try match with relative path
+			if relativePath != "" {
+				strippedRelative := strings.TrimSuffix(relativePath, ".strm")
+				if strings.HasSuffix(episodeFile.Path, relativePath) ||
+					strings.HasSuffix(strings.TrimSuffix(episodeFile.Path, filepath.Ext(episodeFile.Path)), strippedRelative) {
+					slog.InfoContext(ctx, "Found Sonarr episode match by relative path suffix",
+						"sonarr_path", episodeFile.Path,
+						"relative_path", relativePath)
+					targetEpisodeFile = episodeFile
+					break
+				}
+			}
+		}
+
+		if targetEpisodeFile != nil {
+			targetEpisodeFileID = targetEpisodeFile.ID
+		}
 	}
 
 	targetSeriesID := own.seriesID

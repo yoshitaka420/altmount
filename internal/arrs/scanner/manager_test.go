@@ -2,11 +2,20 @@ package scanner
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/javi11/altmount/internal/arrs/clients"
+	"github.com/javi11/altmount/internal/arrs/data"
 	"github.com/javi11/altmount/internal/arrs/instances"
 	"github.com/javi11/altmount/internal/config"
+	"golift.io/starr"
+	"golift.io/starr/sonarr"
 )
 
 func TestParseSonarrSeasonEpisode(t *testing.T) {
@@ -181,76 +190,257 @@ func TestFindInstanceForFilePath_CategoryMatch(t *testing.T) {
 	}
 }
 
-// TestRadarrFileMatchesRepairTarget covers the path-anchored confirmation that
-// gates the destructive Radarr repair (DeleteMovieFilesContext). The critical
-// guarantee is that a filename-only collision (a same-named healthy file at a
-// different/renamed directory) is NOT confirmed as the corrupt target.
-func TestRadarrFileMatchesRepairTarget(t *testing.T) {
+// TestTriggerSonarrRescanByPath_FallbackDoesNotDeleteHealthyFile exercises the
+// season/episode fallback delete path directly. It is reached only when the
+// metadata file ID and the file path/filename fail to match the file we were
+// asked to repair, but the parsed SxxExx still matches an episode Sonarr owns.
+// Because a SxxExx-only match cannot prove Sonarr's current file is the
+// stale/corrupt record (rather than a healthy rename / re-import / upgrade at a
+// new path), the fallback must blocklist + re-search but MUST NOT delete the
+// current episode file. This guards against silently regressing back to deleting
+// a possibly-healthy replacement.
+func TestTriggerSonarrRescanByPath_FallbackDoesNotDeleteHealthyFile(t *testing.T) {
+	const (
+		episodeID     = int64(101)
+		currentFileID = int64(201)
+	)
+
 	tests := []struct {
-		name         string
-		moviePath    string
-		filePath     string
-		relativePath string
-		want         bool
+		name        string
+		repairPath  string // path AltMount asks to repair (stale/corrupt)
+		currentPath string // path Sonarr currently owns for S01E01 (healthy)
 	}{
 		{
-			name:      "exact path match",
-			moviePath: "/lib/Movie (2010)/Movie.2010.mkv",
-			filePath:  "/lib/Movie (2010)/Movie.2010.mkv",
-			want:      true,
+			name:        "renamed file",
+			repairPath:  "/tv/Show/Season 01/Show.S01E01.OLDNAME.mkv",
+			currentPath: "/tv/Show/Season 01/Show.S01E01.RENAMED.mkv",
 		},
 		{
-			name:      "strm-stripped full path match",
-			moviePath: "/lib/Movie (2010)/Movie.2010.mkv",
-			filePath:  "/lib/Movie (2010)/Movie.2010.strm",
-			want:      true,
+			name:        "re-imported file",
+			repairPath:  "/tv/Show/Season 01/Show.S01E01.WEB.mkv",
+			currentPath: "/tv/Show/Season 01/Show.S01E01.WEB-DL.REPACK.mkv",
 		},
 		{
-			name:         "relative suffix match",
-			moviePath:    "/data/media/movies/Movie (2010)/Movie.2010.mkv",
-			filePath:     "/altmount/whatever/Movie.2010.mkv",
-			relativePath: "movies/Movie (2010)/Movie.2010.mkv",
-			want:         true,
-		},
-		{
-			name:         "relative suffix match with .strm relative path",
-			moviePath:    "/data/movies/Movie (2010)/Movie.2010.mkv",
-			filePath:     "/altmount/whatever/Movie.2010.mkv.strm",
-			relativePath: "movies/Movie (2010)/Movie.2010.strm",
-			want:         true,
-		},
-		{
-			name:         "different movie, different path and name",
-			moviePath:    "/lib/Other (2011)/Other.2011.mkv",
-			filePath:     "/lib/Movie (2010)/Movie.2010.mkv.strm",
-			relativePath: "Movie (2010)/Movie.2010.mkv.strm",
-			want:         false,
-		},
-		{
-			// Regression guard: a same-named healthy file at a renamed folder
-			// (symlink library, real media rescan path) must NOT be confirmed,
-			// because filename-only matching is intentionally excluded here.
-			name:         "same filename, different (renamed) directory",
-			moviePath:    "/data/Movie Renamed (2010)/Movie.2010.mkv",
-			filePath:     "/library/Movie (2010)/Movie.2010.mkv",
-			relativePath: "Movie (2010)/Movie.2010.mkv",
-			want:         false,
-		},
-		{
-			name:      "no relative path, no anchored match",
-			moviePath: "/lib/A/Movie.2010.mkv",
-			filePath:  "/other/B/Movie.2010.mkv",
-			want:      false,
+			name:        "healthy upgrade at new path",
+			repairPath:  "/tv/Show/Season 01/Show.S01E01.720p.mkv",
+			currentPath: "/tv/Show/Season 01/Show.S01E01.2160p.PROPER.mkv",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := radarrFileMatchesRepairTarget(tt.moviePath, tt.filePath, tt.relativePath)
-			if got != tt.want {
-				t.Errorf("radarrFileMatchesRepairTarget(%q, %q, %q) = %v; want %v",
-					tt.moviePath, tt.filePath, tt.relativePath, got, tt.want)
+			// grabHistoryID is the "grabbed" history record that blocklisting must
+			// mark as failed (POST /history/failed/{id}) so the re-search can't
+			// simply re-grab the same dead release.
+			const grabHistoryID = "777"
+
+			var (
+				mu                    sync.Mutex
+				deletedFileIDs        []string
+				blocklistedHistoryIDs []string
+				searchCmdName         string
+				searchedEpIDs         []int64
+			)
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				p := r.URL.Path
+				switch {
+				case r.Method == http.MethodDelete && strings.Contains(p, "/episodeFile/"):
+					mu.Lock()
+					deletedFileIDs = append(deletedFileIDs, p[strings.LastIndex(p, "/")+1:])
+					mu.Unlock()
+					_, _ = w.Write([]byte(`{}`))
+				case strings.HasSuffix(p, "/series"):
+					_, _ = w.Write([]byte(`[{"id":1,"title":"Show","path":"/tv/Show"}]`))
+				case strings.HasSuffix(p, "/episodeFile"):
+					_, _ = w.Write([]byte(fmt.Sprintf(`[{"id":%d,"seriesId":1,"path":%q}]`, currentFileID, tt.currentPath)))
+				case strings.HasSuffix(p, "/episode"):
+					_, _ = w.Write([]byte(fmt.Sprintf(`[{"id":%d,"seriesId":1,"seasonNumber":1,"episodeNumber":1,"hasFile":true,"episodeFileId":%d}]`, episodeID, currentFileID)))
+				case strings.HasSuffix(p, "/queue"):
+					_, _ = w.Write([]byte(`{"page":1,"pageSize":500,"sortKey":"timeleft","sortDirection":"ascending","totalRecords":0,"records":[]}`))
+				case r.Method == http.MethodPost && strings.Contains(p, "/history/failed/"):
+					mu.Lock()
+					blocklistedHistoryIDs = append(blocklistedHistoryIDs, p[strings.LastIndex(p, "/")+1:])
+					mu.Unlock()
+					_, _ = w.Write([]byte(`{}`))
+				case strings.HasSuffix(p, "/history"):
+					// Import event links the current file to a download; grab event is
+					// what blocklisting marks as failed.
+					_, _ = w.Write([]byte(fmt.Sprintf(`{"page":1,"pageSize":100,"sortKey":"date","sortDirection":"descending","totalRecords":2,"records":[`+
+						`{"id":1,"eventType":"downloadFolderImported","downloadId":"abc","data":{"fileId":"%d"}},`+
+						`{"id":%s,"eventType":"grabbed","downloadId":"abc"}]}`, currentFileID, grabHistoryID)))
+				case r.Method == http.MethodPost && strings.HasSuffix(p, "/command"):
+					var cmd struct {
+						Name       string  `json:"name"`
+						EpisodeIDs []int64 `json:"episodeIds"`
+					}
+					_ = json.NewDecoder(r.Body).Decode(&cmd)
+					mu.Lock()
+					searchCmdName = cmd.Name
+					searchedEpIDs = cmd.EpisodeIDs
+					mu.Unlock()
+					_, _ = w.Write([]byte(`{"id":555}`))
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.String())
+					http.Error(w, "unexpected", http.StatusNotFound)
+				}
+			}))
+			defer srv.Close()
+
+			cfg := &config.Config{MountPath: "/tv"}
+			mgr := NewManager(func() *config.Config { return cfg }, nil, nil, data.NewManager(), nil)
+			client := sonarr.New(&starr.Config{URL: srv.URL, APIKey: "test", Client: srv.Client()})
+
+			err := mgr.triggerSonarrRescanByPath(context.Background(), client, tt.repairPath, "", "sonarr1", nil)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			// The guard: the healthy file Sonarr currently owns must NOT be deleted.
+			if len(deletedFileIDs) != 0 {
+				t.Errorf("episode file(s) deleted = %v; want none (healthy replacement must be preserved)", deletedFileIDs)
+			}
+			// The dead release must still be blocklisted so the re-search below
+			// won't simply re-grab it.
+			if len(blocklistedHistoryIDs) != 1 || blocklistedHistoryIDs[0] != grabHistoryID {
+				t.Errorf("blocklisted history IDs = %v; want [%s]", blocklistedHistoryIDs, grabHistoryID)
+			}
+			// Recovery must still happen via a targeted re-search of the matched episode.
+			if searchCmdName != "EpisodeSearch" {
+				t.Errorf("search command = %q; want EpisodeSearch", searchCmdName)
+			}
+			if len(searchedEpIDs) != 1 || searchedEpIDs[0] != episodeID {
+				t.Errorf("searched episode IDs = %v; want [%d]", searchedEpIDs, episodeID)
 			}
 		})
+	}
+}
+
+// TestTriggerSonarrRescanByPath_RelativePathFallbackRejectsSibling verifies the
+// secondary series match (folder name against the relative path) is anchored at a
+// path-component boundary. The repaired file belongs to "Showcase", but "Show" is
+// a substring of "Showcase" and is listed first, so the old strings.Contains match
+// would wrongly select "Show". The primary full-path match is forced to miss (the
+// mount prefix differs from the *arr library root) so resolution falls through to
+// the relative-path folder-name branch.
+func TestTriggerSonarrRescanByPath_RelativePathFallbackRejectsSibling(t *testing.T) {
+	var (
+		mu                  sync.Mutex
+		episodeFileSeriesID string
+		episodeSeriesID     string
+		deletedFileIDs      []string
+		searchedEpIDs       []int64
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		p := r.URL.Path
+		switch {
+		case r.Method == http.MethodDelete && strings.Contains(p, "/episodeFile/"):
+			mu.Lock()
+			deletedFileIDs = append(deletedFileIDs, p[strings.LastIndex(p, "/")+1:])
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{}`))
+		case strings.HasSuffix(p, "/series"):
+			// "Show" is a substring of "Showcase" and is listed first, so a naive
+			// substring match would grab "Show" for a Showcase file. Library roots
+			// use a /data/tv prefix that the repair path below does NOT share.
+			_, _ = w.Write([]byte(`[{"id":1,"title":"Show","path":"/data/tv/Show"},{"id":2,"title":"Showcase","path":"/data/tv/Showcase"}]`))
+		case strings.HasSuffix(p, "/episodeFile"):
+			mu.Lock()
+			episodeFileSeriesID = r.URL.Query().Get("seriesId")
+			mu.Unlock()
+			// Filename differs from the repair path so the file scan misses and the
+			// season/episode fallback (blocklist-only) handles recovery.
+			_, _ = w.Write([]byte(`[{"id":402,"seriesId":2,"path":"/data/tv/Showcase/Season 01/Showcase.S01E01.NEW.mkv"}]`))
+		case strings.HasSuffix(p, "/episode"):
+			mu.Lock()
+			episodeSeriesID = r.URL.Query().Get("seriesId")
+			mu.Unlock()
+			_, _ = w.Write([]byte(`[{"id":222,"seriesId":2,"seasonNumber":1,"episodeNumber":1,"hasFile":true,"episodeFileId":402}]`))
+		case strings.HasSuffix(p, "/queue"):
+			_, _ = w.Write([]byte(`{"page":1,"pageSize":500,"sortKey":"timeleft","sortDirection":"ascending","totalRecords":0,"records":[]}`))
+		case strings.HasSuffix(p, "/history"):
+			_, _ = w.Write([]byte(`{"page":1,"pageSize":100,"sortKey":"date","sortDirection":"descending","totalRecords":0,"records":[]}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(p, "/command"):
+			var cmd struct {
+				EpisodeIDs []int64 `json:"episodeIds"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&cmd)
+			mu.Lock()
+			searchedEpIDs = cmd.EpisodeIDs
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"id":555}`))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.String())
+			http.Error(w, "unexpected", http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{MountPath: "/mnt/lib"}
+	mgr := NewManager(func() *config.Config { return cfg }, nil, nil, data.NewManager(), nil)
+	client := sonarr.New(&starr.Config{URL: srv.URL, APIKey: "test", Client: srv.Client()})
+
+	// Repair path's mount prefix (/mnt/lib) differs from the library root
+	// (/data/tv), so the primary full-path match misses for both series and
+	// resolution falls through to the relative-path folder-name branch.
+	err := mgr.triggerSonarrRescanByPath(context.Background(), client,
+		"/mnt/lib/Showcase/Season 01/Showcase.S01E01.OLD.mkv",
+		"Showcase/Season 01/Showcase.S01E01.OLD.mkv", "sonarr1", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// The correct series ("Showcase", id 2) must be selected — never the substring
+	// sibling "Show" (id 1).
+	if episodeFileSeriesID != "2" {
+		t.Errorf("episodeFile seriesId = %q; want \"2\" (Showcase, not Show)", episodeFileSeriesID)
+	}
+	if episodeSeriesID != "2" {
+		t.Errorf("episode seriesId = %q; want \"2\" (Showcase, not Show)", episodeSeriesID)
+	}
+	if len(searchedEpIDs) != 1 || searchedEpIDs[0] != 222 {
+		t.Errorf("searched episode IDs = %v; want [222]", searchedEpIDs)
+	}
+	if len(deletedFileIDs) != 0 {
+		t.Errorf("episode file(s) deleted = %v; want none", deletedFileIDs)
+	}
+}
+
+// TestSonarrHasFile_RejectsSiblingFolder verifies the instance-routing folder-name
+// check is anchored at a path-component boundary: a file under "Showcase" must not
+// be reported as owned by an instance that only has the "Show" series, since "Show"
+// is a substring of "Showcase".
+func TestSonarrHasFile_RejectsSiblingFolder(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/series") {
+			_, _ = w.Write([]byte(`[{"id":1,"title":"Show","path":"/data/tv/Show"}]`))
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.String())
+		http.Error(w, "unexpected", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{MountPath: "/mnt/lib"}
+	mgr := NewManager(func() *config.Config { return cfg }, nil, nil, data.NewManager(), nil)
+	client := sonarr.New(&starr.Config{URL: srv.URL, APIKey: "test", Client: srv.Client()})
+
+	// Sibling: file belongs to "Showcase" but only "Show" exists -> must NOT match.
+	if mgr.sonarrHasFile(context.Background(), client, "sonarr1", "Showcase/Season 01/Showcase.S01E01.mkv") {
+		t.Error("sonarrHasFile matched a Showcase file against the Show series (sibling substring); want no match")
+	}
+	// Genuine: file actually belongs to "Show" -> must match.
+	if !mgr.sonarrHasFile(context.Background(), client, "sonarr1", "Show/Season 01/Show.S01E01.mkv") {
+		t.Error("sonarrHasFile did not match a genuine Show file; want match")
 	}
 }
