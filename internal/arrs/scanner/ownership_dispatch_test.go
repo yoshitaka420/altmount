@@ -27,6 +27,12 @@ func dispatchManager(srv *httptest.Server, instanceType, instanceName string) *M
 		arrs.SonarrInstances = []config.ArrsInstanceConfig{inst}
 	case "lidarr":
 		arrs.LidarrInstances = []config.ArrsInstanceConfig{inst}
+	case "readarr":
+		arrs.ReadarrInstances = []config.ArrsInstanceConfig{inst}
+	case "whisparr":
+		arrs.WhisparrInstances = []config.ArrsInstanceConfig{inst}
+	case "sportarr":
+		arrs.SportarrInstances = []config.ArrsInstanceConfig{inst}
 	}
 	cfg := &config.Config{MountPath: "/mnt", Arrs: arrs}
 	getter := func() *config.Config { return cfg }
@@ -236,15 +242,17 @@ func TestResolveOwnership_SonarrUnowned(t *testing.T) {
 }
 
 func TestResolveOwnership_NonIntrospectableFailsClosed(t *testing.T) {
+	// Sportarr uses a native (non-starr) API and is intentionally not introspected,
+	// so triage must never act on its files. No HTTP call should be made.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected request to non-introspectable arr: %s", r.URL.String())
 	}))
 	defer srv.Close()
 
-	mgr := dispatchManager(srv, "lidarr", "lidarr1")
-	meta := &model.WebhookMetadata{InstanceName: "lidarr1"}
+	mgr := dispatchManager(srv, "sportarr", "sportarr1")
+	meta := &model.WebhookMetadata{InstanceName: "sportarr1"}
 
-	got := mgr.ResolveOwnership(context.Background(), "/music/track.flac", "", meta)
+	got := mgr.ResolveOwnership(context.Background(), "/sports/event.mkv", "", meta)
 	if got.Status != model.OwnershipUnknown {
 		t.Fatalf("status = %v; want unknown for non-introspectable arr", got.Status)
 	}
@@ -262,5 +270,278 @@ func TestResolveOwnership_NoInstanceFailsClosed(t *testing.T) {
 	got := mgr.ResolveOwnership(context.Background(), "/x.mkv", "", nil)
 	if got.Status != model.OwnershipUnknown {
 		t.Fatalf("status = %v; want unknown", got.Status)
+	}
+}
+
+func TestResolveOwnership_WhisparrOwned(t *testing.T) {
+	// Whisparr uses the Sonarr API; ID-based metadata + an episode referencing the
+	// file id resolves to Owned.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/episode") && r.URL.Query().Get("seriesId") == "12" {
+			_, _ = w.Write([]byte(`[{"id":1,"seasonNumber":1,"episodeNumber":5,"hasFile":true,"episodeFileId":555}]`))
+			return
+		}
+		t.Errorf("unexpected request: %s", r.URL.String())
+	}))
+	defer srv.Close()
+
+	mgr := dispatchManager(srv, "whisparr", "whisparr1")
+	meta := &model.WebhookMetadata{
+		InstanceName: "whisparr1",
+		Series:       &model.SeriesMetadata{Id: 12},
+		EpisodeFile:  &model.EpisodeFileMetadata{Id: 555},
+	}
+
+	got := mgr.ResolveOwnership(context.Background(), "/xxx/Show/Season 01/Show.S01E05.mkv", "", meta)
+	if got.Status != model.OwnershipOwned {
+		t.Fatalf("status = %v; want owned", got.Status)
+	}
+	if got.InstanceType != "whisparr" {
+		t.Errorf("instanceType = %s; want whisparr", got.InstanceType)
+	}
+}
+
+func TestResolveOwnership_LidarrOwned(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// GET /api/v1/artist (list all)
+		if strings.HasSuffix(r.URL.Path, "/artist") {
+			_, _ = w.Write([]byte(`[{"id":3,"path":"/music/Pink Floyd"}]`))
+			return
+		}
+		t.Errorf("unexpected request: %s", r.URL.String())
+	}))
+	defer srv.Close()
+
+	mgr := dispatchManager(srv, "lidarr", "lidarr1")
+	meta := &model.WebhookMetadata{InstanceName: "lidarr1"}
+
+	got := mgr.ResolveOwnership(context.Background(), "/music/Pink Floyd/The Wall/track.flac", "", meta)
+	if got.Status != model.OwnershipOwned {
+		t.Fatalf("status = %v; want owned (file under artist folder)", got.Status)
+	}
+	if got.SafeToDelete() {
+		t.Errorf("SafeToDelete = true for owned; want false")
+	}
+}
+
+func TestResolveOwnership_LidarrUnowned(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/artist") {
+			_, _ = w.Write([]byte(`[{"id":3,"path":"/music/Pink Floyd"}]`))
+			return
+		}
+		t.Errorf("unexpected request: %s", r.URL.String())
+	}))
+	defer srv.Close()
+
+	mgr := dispatchManager(srv, "lidarr", "lidarr1")
+	meta := &model.WebhookMetadata{InstanceName: "lidarr1"}
+
+	got := mgr.ResolveOwnership(context.Background(), "/music/Unknown Artist/x.flac", "", meta)
+	if got.Status != model.OwnershipUnowned {
+		t.Fatalf("status = %v; want unowned (no artist folder matches)", got.Status)
+	}
+	if !got.SafeToDelete() {
+		t.Errorf("SafeToDelete = false for unowned; want true")
+	}
+}
+
+func TestResolveOwnership_LidarrErrorFailsClosed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/artist") {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		t.Errorf("unexpected request: %s", r.URL.String())
+	}))
+	defer srv.Close()
+
+	mgr := dispatchManager(srv, "lidarr", "lidarr1")
+	meta := &model.WebhookMetadata{InstanceName: "lidarr1"}
+
+	got := mgr.ResolveOwnership(context.Background(), "/music/x/y.flac", "", meta)
+	if got.Status != model.OwnershipUnknown {
+		t.Fatalf("status = %v; want unknown (fail closed)", got.Status)
+	}
+}
+
+func TestResolveOwnership_ReadarrOwned(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// GET /api/v1/author (list all)
+		if strings.HasSuffix(r.URL.Path, "/author") {
+			_, _ = w.Write([]byte(`[{"id":8,"path":"/books/Brandon Sanderson"}]`))
+			return
+		}
+		t.Errorf("unexpected request: %s", r.URL.String())
+	}))
+	defer srv.Close()
+
+	mgr := dispatchManager(srv, "readarr", "readarr1")
+	meta := &model.WebhookMetadata{InstanceName: "readarr1"}
+
+	got := mgr.ResolveOwnership(context.Background(), "/books/Brandon Sanderson/Mistborn/book.epub", "", meta)
+	if got.Status != model.OwnershipOwned {
+		t.Fatalf("status = %v; want owned (file under author folder)", got.Status)
+	}
+}
+
+func TestResolveOwnership_ReadarrUnowned(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/author") {
+			_, _ = w.Write([]byte(`[{"id":8,"path":"/books/Brandon Sanderson"}]`))
+			return
+		}
+		t.Errorf("unexpected request: %s", r.URL.String())
+	}))
+	defer srv.Close()
+
+	mgr := dispatchManager(srv, "readarr", "readarr1")
+	meta := &model.WebhookMetadata{InstanceName: "readarr1"}
+
+	got := mgr.ResolveOwnership(context.Background(), "/books/Unknown Author/x.epub", "", meta)
+	if got.Status != model.OwnershipUnowned {
+		t.Fatalf("status = %v; want unowned", got.Status)
+	}
+}
+
+func TestResolveOwnership_LidarrOwnedFileStillReferenced(t *testing.T) {
+	// Webhook metadata carries the dead track-file id; it's still among the
+	// artist's track files -> Owned (will be repaired).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/artist/3"):
+			_, _ = w.Write([]byte(`{"id":3,"path":"/music/Pink Floyd"}`))
+		case strings.HasSuffix(r.URL.Path, "/trackfile") && r.URL.Query().Get("artistId") == "3":
+			_, _ = w.Write([]byte(`[{"id":555,"path":"/music/Pink Floyd/track.flac"}]`))
+		default:
+			t.Errorf("unexpected request: %s", r.URL.String())
+		}
+	}))
+	defer srv.Close()
+
+	mgr := dispatchManager(srv, "lidarr", "lidarr1")
+	meta := &model.WebhookMetadata{
+		InstanceName: "lidarr1",
+		Artist:       &model.ArtistMetadata{Id: 3},
+		TrackFile:    &model.TrackFileMetadata{Id: 555},
+	}
+
+	got := mgr.ResolveOwnership(context.Background(), "/music/Pink Floyd/track.flac", "", meta)
+	if got.Status != model.OwnershipOwned {
+		t.Fatalf("status = %v; want owned (track file still referenced)", got.Status)
+	}
+}
+
+func TestResolveOwnership_LidarrReplaced(t *testing.T) {
+	// Dead track-file 555 is gone from the artist, and the same album now has a
+	// different file (999) -> Replaced.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/artist/3"):
+			_, _ = w.Write([]byte(`{"id":3,"path":"/music/Pink Floyd"}`))
+		case strings.HasSuffix(r.URL.Path, "/trackfile") && r.URL.Query().Get("artistId") == "3":
+			_, _ = w.Write([]byte(`[{"id":700,"path":"/music/Pink Floyd/other.flac"}]`))
+		case strings.HasSuffix(r.URL.Path, "/trackfile") && r.URL.Query().Get("albumId") == "42":
+			_, _ = w.Write([]byte(`[{"id":999,"path":"/music/Pink Floyd/The Wall/track-2024.flac"}]`))
+		default:
+			t.Errorf("unexpected request: %s", r.URL.String())
+		}
+	}))
+	defer srv.Close()
+
+	mgr := dispatchManager(srv, "lidarr", "lidarr1")
+	meta := &model.WebhookMetadata{
+		InstanceName: "lidarr1",
+		Artist:       &model.ArtistMetadata{Id: 3},
+		Album:        &model.AlbumMetadata{Id: 42},
+		TrackFile:    &model.TrackFileMetadata{Id: 555},
+	}
+
+	got := mgr.ResolveOwnership(context.Background(), "/music/Pink Floyd/The Wall/track.flac", "", meta)
+	if got.Status != model.OwnershipReplaced {
+		t.Fatalf("status = %v; want replaced", got.Status)
+	}
+	if got.ReplacementID != 999 {
+		t.Errorf("replacementID = %d; want 999", got.ReplacementID)
+	}
+}
+
+func TestResolveOwnership_ReadarrReplaced(t *testing.T) {
+	// Dead book-file 21 is gone from the author; the same book now has file 88.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/author/5"):
+			_, _ = w.Write([]byte(`{"id":5,"path":"/books/Brandon Sanderson"}`))
+		case strings.HasSuffix(r.URL.Path, "/bookfile") && r.URL.Query().Get("authorId") == "5":
+			_, _ = w.Write([]byte(`[{"id":70,"path":"/books/Brandon Sanderson/Elantris/book.epub"}]`))
+		case strings.HasSuffix(r.URL.Path, "/bookfile") && r.URL.Query().Get("bookId") == "9":
+			_, _ = w.Write([]byte(`[{"id":88,"path":"/books/Brandon Sanderson/Mistborn/book-v2.epub"}]`))
+		default:
+			t.Errorf("unexpected request: %s", r.URL.String())
+		}
+	}))
+	defer srv.Close()
+
+	mgr := dispatchManager(srv, "readarr", "readarr1")
+	meta := &model.WebhookMetadata{
+		InstanceName: "readarr1",
+		Author:       &model.AuthorMetadata{Id: 5},
+		Book:         &model.BookMetadata{Id: 9},
+		BookFile:     &model.BookFileMetadata{Id: 21},
+	}
+
+	got := mgr.ResolveOwnership(context.Background(), "/books/Brandon Sanderson/Mistborn/book.epub", "", meta)
+	if got.Status != model.OwnershipReplaced {
+		t.Fatalf("status = %v; want replaced", got.Status)
+	}
+	if got.ReplacementID != 88 {
+		t.Errorf("replacementID = %d; want 88", got.ReplacementID)
+	}
+}
+
+func TestResolveOwnership_ReadarrOwnedFileStillReferenced(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/author/5"):
+			_, _ = w.Write([]byte(`{"id":5,"path":"/books/Brandon Sanderson"}`))
+		case strings.HasSuffix(r.URL.Path, "/bookfile") && r.URL.Query().Get("authorId") == "5":
+			_, _ = w.Write([]byte(`[{"id":21,"path":"/books/Brandon Sanderson/Mistborn/book.epub"}]`))
+		default:
+			t.Errorf("unexpected request: %s", r.URL.String())
+		}
+	}))
+	defer srv.Close()
+
+	mgr := dispatchManager(srv, "readarr", "readarr1")
+	meta := &model.WebhookMetadata{
+		InstanceName: "readarr1",
+		Author:       &model.AuthorMetadata{Id: 5},
+		BookFile:     &model.BookFileMetadata{Id: 21},
+	}
+
+	got := mgr.ResolveOwnership(context.Background(), "/books/Brandon Sanderson/Mistborn/book.epub", "", meta)
+	if got.Status != model.OwnershipOwned {
+		t.Fatalf("status = %v; want owned (book file still referenced)", got.Status)
+	}
+}
+
+func TestResolveOwnership_ReadarrErrorFailsClosed(t *testing.T) {
+	// The raw author list errors out -> Unknown (fail closed). Mirrors the Lidarr
+	// error test; Readarr is the one using the non-typed GetInto path.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/author") {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		t.Errorf("unexpected request: %s", r.URL.String())
+	}))
+	defer srv.Close()
+
+	mgr := dispatchManager(srv, "readarr", "readarr1")
+	meta := &model.WebhookMetadata{InstanceName: "readarr1"}
+
+	got := mgr.ResolveOwnership(context.Background(), "/books/x/y.epub", "", meta)
+	if got.Status != model.OwnershipUnknown {
+		t.Fatalf("status = %v; want unknown (fail closed)", got.Status)
 	}
 }

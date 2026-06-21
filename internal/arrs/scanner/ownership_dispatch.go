@@ -3,8 +3,13 @@ package scanner
 import (
 	"context"
 	"log/slog"
+	"net/url"
+	"path/filepath"
 
 	"github.com/javi11/altmount/internal/arrs/model"
+	"golift.io/starr"
+	"golift.io/starr/lidarr"
+	"golift.io/starr/readarr"
 	"golift.io/starr/sonarr"
 )
 
@@ -15,8 +20,8 @@ import (
 // only ever promoted to Unowned/Replaced on a *positive* determination. Any
 // error, timeout, unreachable instance, or non-introspectable arr leaves the
 // status Unknown so that callers (e.g. corrupted-file triage) never delete on
-// ambiguity. Only Radarr and Sonarr expose the per-file ownership detail needed
-// to make a safe determination; every other instance type is reported Unknown.
+// ambiguity. Radarr, Sonarr, Whisparr (Sonarr-compatible), Lidarr, and Readarr
+// are introspected; Sportarr and anything else stay Unknown.
 func (m *Manager) ResolveOwnership(ctx context.Context, filePath, relativePath string, metadata *model.WebhookMetadata) model.Ownership {
 	res := model.Ownership{Status: model.OwnershipUnknown}
 
@@ -62,24 +67,55 @@ func (m *Manager) ResolveOwnership(ctx context.Context, filePath, relativePath s
 			res.Status = model.OwnershipUnowned
 		}
 
-	case "sonarr":
-		client, err := m.clients.GetOrCreateSonarrClient(instanceName, instanceConfig.URL, instanceConfig.APIKey)
+	case "sonarr", "whisparr":
+		// Whisparr speaks the Sonarr API and is created through the Whisparr client,
+		// so it reuses the Sonarr resolver verbatim.
+		client, err := m.sonarrCompatibleClient(instanceType, instanceName, instanceConfig.URL, instanceConfig.APIKey)
 		if err != nil {
-			slog.WarnContext(ctx, "Ownership unknown: failed to create Sonarr client", "instance", instanceName, "error", err)
+			slog.WarnContext(ctx, "Ownership unknown: failed to create Sonarr-compatible client", "instance", instanceName, "type", instanceType, "error", err)
 			return res
 		}
 		status, replacementID := m.resolveSonarrOwnershipStatus(ctx, client, filePath, relativePath, instanceName, metadata)
 		res.Status = status
 		res.ReplacementID = replacementID
 
+	case "lidarr":
+		client, err := m.clients.GetOrCreateLidarrClient(instanceName, instanceConfig.URL, instanceConfig.APIKey)
+		if err != nil {
+			slog.WarnContext(ctx, "Ownership unknown: failed to create Lidarr client", "instance", instanceName, "error", err)
+			return res
+		}
+		status, replacementID := m.resolveLidarrOwnershipStatus(ctx, client, filePath, relativePath, instanceName, metadata)
+		res.Status = status
+		res.ReplacementID = replacementID
+
+	case "readarr":
+		client, err := m.clients.GetOrCreateReadarrClient(instanceName, instanceConfig.URL, instanceConfig.APIKey)
+		if err != nil {
+			slog.WarnContext(ctx, "Ownership unknown: failed to create Readarr client", "instance", instanceName, "error", err)
+			return res
+		}
+		status, replacementID := m.resolveReadarrOwnershipStatus(ctx, client, filePath, relativePath, instanceName, metadata)
+		res.Status = status
+		res.ReplacementID = replacementID
+
 	default:
-		// lidarr, readarr, whisparr, sportarr, etc. are not introspected for
-		// fine-grained file ownership here: stay Unknown (fail closed).
+		// sportarr (native, non-starr API) and anything else are not introspected:
+		// stay Unknown (fail closed) so triage never deletes their files.
 		slog.DebugContext(ctx, "Ownership unknown: instance type not introspectable for triage",
 			"instance", instanceName, "type", instanceType)
 	}
 
 	return res
+}
+
+// sonarrCompatibleClient returns a *sonarr.Sonarr for a Sonarr or Whisparr
+// instance (Whisparr uses the Sonarr API).
+func (m *Manager) sonarrCompatibleClient(instanceType, instanceName, instanceURL, apiKey string) (*sonarr.Sonarr, error) {
+	if instanceType == "whisparr" {
+		return m.clients.GetOrCreateWhisparrClient(instanceName, instanceURL, apiKey)
+	}
+	return m.clients.GetOrCreateSonarrClient(instanceName, instanceURL, apiKey)
 }
 
 // resolveSonarrOwnershipStatus turns a Sonarr ownership resolution into a
@@ -166,4 +202,168 @@ func (m *Manager) findOwningInstance(ctx context.Context, filePath, relativePath
 		return "", ""
 	}
 	return instanceType, instanceName
+}
+
+// entityPath pairs an *arr entity id (artist/author) with its library folder.
+type entityPath struct {
+	id   int64
+	path string
+}
+
+// findEntityByPath returns the id of the first entity whose folder owns filePath
+// (component-boundary match), with a folder-name fallback against relativePath.
+func findEntityByPath(entities []entityPath, filePath, relativePath string) (int64, bool) {
+	for _, e := range entities {
+		if e.path != "" && pathContainsDir(filePath, e.path) {
+			return e.id, true
+		}
+	}
+	if relativePath != "" {
+		for _, e := range entities {
+			if e.path != "" && hasPathComponent(relativePath, filepath.Base(e.path)) {
+				return e.id, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// resolveLidarrArtist resolves the Lidarr artist that owns filePath: targeted by
+// the webhook's artist id, otherwise by matching the file against each artist's
+// folder. found=false means no artist owns the path (genuinely unowned); a
+// non-nil error means the lookup itself failed (fail closed).
+func (m *Manager) resolveLidarrArtist(ctx context.Context, client *lidarr.Lidarr, filePath, relativePath, instanceName string, metadata *model.WebhookMetadata) (artistID int64, found bool, err error) {
+	if metadata != nil && metadata.Artist != nil && metadata.Artist.Id > 0 {
+		if a, e := client.GetArtistByIDContext(ctx, metadata.Artist.Id); e == nil && a != nil && a.ID > 0 {
+			return a.ID, true, nil
+		}
+	}
+	artists, e := client.GetArtistContext(ctx, "")
+	if e != nil {
+		slog.WarnContext(ctx, "Ownership unknown: Lidarr artist lookup failed", "instance", instanceName, "error", e)
+		return 0, false, e
+	}
+	entities := make([]entityPath, 0, len(artists))
+	for _, a := range artists {
+		entities = append(entities, entityPath{id: a.ID, path: a.Path})
+	}
+	id, ok := findEntityByPath(entities, filePath, relativePath)
+	return id, ok, nil
+}
+
+// resolveLidarrOwnershipStatus resolves read-only, fail-closed ownership for a
+// Lidarr-managed (music) file at file granularity, mirroring the Sonarr resolver
+// (artist→track files like series→episode files). No artist owns the path →
+// Unowned; the dead track file (from webhook metadata) is still present → Owned;
+// it is gone but the same album now has a different file → Replaced; any lookup
+// error → Unknown.
+func (m *Manager) resolveLidarrOwnershipStatus(ctx context.Context, client *lidarr.Lidarr, filePath, relativePath, instanceName string, metadata *model.WebhookMetadata) (model.OwnershipStatus, int64) {
+	artistID, found, err := m.resolveLidarrArtist(ctx, client, filePath, relativePath, instanceName, metadata)
+	if err != nil {
+		return model.OwnershipUnknown, 0
+	}
+	if !found {
+		return model.OwnershipUnowned, 0
+	}
+
+	var oldFileID int64
+	if metadata != nil && metadata.TrackFile != nil {
+		oldFileID = metadata.TrackFile.Id
+	}
+	if oldFileID == 0 {
+		// Artist owns the area but there is no dead-file id to chase: keep.
+		return model.OwnershipOwned, 0
+	}
+
+	trackFiles, err := client.GetTrackFilesForArtistContext(ctx, artistID)
+	if err != nil {
+		slog.WarnContext(ctx, "Ownership unknown: Lidarr track-file lookup failed", "instance", instanceName, "error", err)
+		return model.OwnershipUnknown, 0
+	}
+	for _, tf := range trackFiles {
+		if tf.ID == oldFileID {
+			// The dead file is still referenced; a repair will be driven against it.
+			return model.OwnershipOwned, 0
+		}
+	}
+	// The dead file is gone: look for a replacement within the same album.
+	// (oldFileID>0 already implies metadata!=nil; the guard makes that local.)
+	if metadata != nil && metadata.Album != nil && metadata.Album.Id > 0 {
+		if albumFiles, aerr := client.GetTrackFilesForAlbumContext(ctx, metadata.Album.Id); aerr == nil {
+			for _, tf := range albumFiles {
+				if tf.ID > 0 && tf.ID != oldFileID {
+					return model.OwnershipReplaced, tf.ID
+				}
+			}
+		}
+	}
+	// Artist owns the area but a replacement can't be confirmed: conservative keep.
+	return model.OwnershipOwned, 0
+}
+
+// resolveReadarrAuthor resolves the Readarr author that owns filePath. Readarr
+// has no typed "list all authors" helper in this starr version, so the path
+// fallback issues the raw GET the typed helpers use under the hood.
+func (m *Manager) resolveReadarrAuthor(ctx context.Context, client *readarr.Readarr, filePath, relativePath, instanceName string, metadata *model.WebhookMetadata) (authorID int64, found bool, err error) {
+	if metadata != nil && metadata.Author != nil && metadata.Author.Id > 0 {
+		if a, e := client.GetAuthorByIDContext(ctx, metadata.Author.Id); e == nil && a != nil && a.ID > 0 {
+			return a.ID, true, nil
+		}
+	}
+	var authors []*readarr.Author
+	req := starr.Request{URI: "v1/author", Query: make(url.Values)}
+	if e := client.GetInto(ctx, req, &authors); e != nil {
+		slog.WarnContext(ctx, "Ownership unknown: Readarr author lookup failed", "instance", instanceName, "error", e)
+		return 0, false, e
+	}
+	entities := make([]entityPath, 0, len(authors))
+	for _, a := range authors {
+		entities = append(entities, entityPath{id: a.ID, path: a.Path})
+	}
+	id, ok := findEntityByPath(entities, filePath, relativePath)
+	return id, ok, nil
+}
+
+// resolveReadarrOwnershipStatus resolves read-only, fail-closed ownership for a
+// Readarr-managed (book) file at file granularity, mirroring the Lidarr resolver
+// (author→book files, with the book as the replacement scope).
+func (m *Manager) resolveReadarrOwnershipStatus(ctx context.Context, client *readarr.Readarr, filePath, relativePath, instanceName string, metadata *model.WebhookMetadata) (model.OwnershipStatus, int64) {
+	authorID, found, err := m.resolveReadarrAuthor(ctx, client, filePath, relativePath, instanceName, metadata)
+	if err != nil {
+		return model.OwnershipUnknown, 0
+	}
+	if !found {
+		return model.OwnershipUnowned, 0
+	}
+
+	var oldFileID int64
+	if metadata != nil && metadata.BookFile != nil {
+		oldFileID = metadata.BookFile.Id
+	}
+	if oldFileID == 0 {
+		return model.OwnershipOwned, 0
+	}
+
+	bookFiles, err := client.GetBookFilesForAuthorContext(ctx, authorID)
+	if err != nil {
+		slog.WarnContext(ctx, "Ownership unknown: Readarr book-file lookup failed", "instance", instanceName, "error", err)
+		return model.OwnershipUnknown, 0
+	}
+	for _, bf := range bookFiles {
+		if bf.ID == oldFileID {
+			return model.OwnershipOwned, 0
+		}
+	}
+	// The dead file is gone: look for a replacement of the same book.
+	// (oldFileID>0 already implies metadata!=nil; the guard makes that local.)
+	if metadata != nil && metadata.Book != nil && metadata.Book.Id > 0 {
+		if bookFiles2, berr := client.GetBookFilesForBookContext(ctx, metadata.Book.Id); berr == nil {
+			for _, bf := range bookFiles2 {
+				if bf.ID > 0 && bf.ID != oldFileID {
+					return model.OwnershipReplaced, bf.ID
+				}
+			}
+		}
+	}
+	return model.OwnershipOwned, 0
 }

@@ -311,10 +311,12 @@ func (s *Service) applyDelete(ctx context.Context, item *database.FileHealth, de
 	}
 
 	if err := s.meta.Delete(ctx, item); err != nil {
-		// The row is already gone; surface the .meta failure but still count the
-		// record as triaged.
-		slog.ErrorContext(ctx, "Corrupted triage deleted health row but failed to delete .meta",
+		// The health row is already gone but the .meta remains, so the file can
+		// still be visible: report this as a (partial) failure rather than success
+		// so it is counted as an error and surfaced.
+		slog.ErrorContext(ctx, "Corrupted triage deleted health row but failed to delete .meta; file may remain visible",
 			"source", source, "file_path", item.FilePath, "error", err)
+		return false, err
 	}
 
 	slog.InfoContext(ctx, "Corrupted triage soft-deleted file bookkeeping",
