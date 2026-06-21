@@ -12,8 +12,19 @@ import (
 )
 
 var (
-	tvSeasonPattern = regexp.MustCompile(`(?i)S\d{1,4}E\d{1,4}`)
-	tvDatePattern   = regexp.MustCompile(`(?i)\d{4}.\d{2}.\d{2}`)
+	// tvSeasonPattern matches a standard SxxExx token and captures the season
+	// (group 1) and episode (group 2) numbers. It is used both as a TV/movie
+	// discriminator (MatchString ignores the capture groups) and to recover the
+	// stable season/episode of a file whose Sonarr file record has gone stale.
+	tvSeasonPattern = regexp.MustCompile(`(?i)S(\d{1,4})E(\d{1,4})`)
+	// tvMultiEpisodePattern detects multi-episode files (e.g. S01E01E02,
+	// S01E01-E02, S01E01-02). These are intentionally not matched by the
+	// season/episode fallback because a single season/episode pair cannot
+	// represent them safely. The bare range alternative is anchored with a word
+	// boundary so a dashed resolution suffix (e.g. S01E01-1080p) is not mistaken
+	// for an episode range.
+	tvMultiEpisodePattern = regexp.MustCompile(`(?i)S\d{1,4}E\d{1,4}(?:[\s._-]*E\d{1,4}|-\d{1,4}\b)`)
+	tvDatePattern         = regexp.MustCompile(`(?i)\d{4}.\d{2}.\d{2}`)
 )
 
 // DiscoverFileMetadata attempts to find the rich metadata for a file by searching ARR instances.
