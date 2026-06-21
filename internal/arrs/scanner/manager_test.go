@@ -229,11 +229,17 @@ func TestTriggerSonarrRescanByPath_FallbackDoesNotDeleteHealthyFile(t *testing.T
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// grabHistoryID is the "grabbed" history record that blocklisting must
+			// mark as failed (POST /history/failed/{id}) so the re-search can't
+			// simply re-grab the same dead release.
+			const grabHistoryID = "777"
+
 			var (
-				mu             sync.Mutex
-				deletedFileIDs []string
-				searchCmdName  string
-				searchedEpIDs  []int64
+				mu                    sync.Mutex
+				deletedFileIDs        []string
+				blocklistedHistoryIDs []string
+				searchCmdName         string
+				searchedEpIDs         []int64
 			)
 
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -253,8 +259,17 @@ func TestTriggerSonarrRescanByPath_FallbackDoesNotDeleteHealthyFile(t *testing.T
 					_, _ = w.Write([]byte(fmt.Sprintf(`[{"id":%d,"seriesId":1,"seasonNumber":1,"episodeNumber":1,"hasFile":true,"episodeFileId":%d}]`, episodeID, currentFileID)))
 				case strings.HasSuffix(p, "/queue"):
 					_, _ = w.Write([]byte(`{"page":1,"pageSize":500,"sortKey":"timeleft","sortDirection":"ascending","totalRecords":0,"records":[]}`))
+				case r.Method == http.MethodPost && strings.Contains(p, "/history/failed/"):
+					mu.Lock()
+					blocklistedHistoryIDs = append(blocklistedHistoryIDs, p[strings.LastIndex(p, "/")+1:])
+					mu.Unlock()
+					_, _ = w.Write([]byte(`{}`))
 				case strings.HasSuffix(p, "/history"):
-					_, _ = w.Write([]byte(`{"page":1,"pageSize":100,"sortKey":"date","sortDirection":"descending","totalRecords":0,"records":[]}`))
+					// Import event links the current file to a download; grab event is
+					// what blocklisting marks as failed.
+					_, _ = w.Write([]byte(fmt.Sprintf(`{"page":1,"pageSize":100,"sortKey":"date","sortDirection":"descending","totalRecords":2,"records":[`+
+						`{"id":1,"eventType":"downloadFolderImported","downloadId":"abc","data":{"fileId":"%d"}},`+
+						`{"id":%s,"eventType":"grabbed","downloadId":"abc"}]}`, currentFileID, grabHistoryID)))
 				case r.Method == http.MethodPost && strings.HasSuffix(p, "/command"):
 					var cmd struct {
 						Name       string  `json:"name"`
@@ -288,6 +303,11 @@ func TestTriggerSonarrRescanByPath_FallbackDoesNotDeleteHealthyFile(t *testing.T
 			// The guard: the healthy file Sonarr currently owns must NOT be deleted.
 			if len(deletedFileIDs) != 0 {
 				t.Errorf("episode file(s) deleted = %v; want none (healthy replacement must be preserved)", deletedFileIDs)
+			}
+			// The dead release must still be blocklisted so the re-search below
+			// won't simply re-grab it.
+			if len(blocklistedHistoryIDs) != 1 || blocklistedHistoryIDs[0] != grabHistoryID {
+				t.Errorf("blocklisted history IDs = %v; want [%s]", blocklistedHistoryIDs, grabHistoryID)
 			}
 			// Recovery must still happen via a targeted re-search of the matched episode.
 			if searchCmdName != "EpisodeSearch" {
