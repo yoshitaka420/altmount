@@ -148,6 +148,35 @@ func TestResolveRadarrOwnership_PathMatchByFilename(t *testing.T) {
 	}
 }
 
+func TestResolveRadarrOwnership_StrongerMatchWinsOverBasename(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Full-list scan. Movie 1's file shares the request basename ("Common.mkv");
+		// movie 2 matches by the stronger relative-path suffix.
+		if strings.HasSuffix(r.URL.Path, "/movie") && r.URL.Query().Get("tmdbId") == "" {
+			_, _ = w.Write([]byte(`[{"id":1,"title":"A","hasFile":true,"movieFile":{"id":101,"path":"/library/A/Common.mkv"}},{"id":2,"title":"B Show","hasFile":true,"movieFile":{"id":202,"path":"/library/B Show/Season 01/Common.mkv"}}]`))
+			return
+		}
+		t.Errorf("unexpected request: %s", r.URL.String())
+	}))
+	defer srv.Close()
+
+	mgr := newResolverManager(nil)
+
+	// Movie 1 is hit first by basename, but it must only be a search-only fallback;
+	// movie 2's relative-suffix match is stronger and must win with a deletable id.
+	own, err := mgr.resolveRadarrOwnership(context.Background(), newRadarrClient(srv),
+		"/downloads/Common.mkv", "Season 01/Common.mkv", "radarr1", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if own.movie == nil || own.movie.ID != 2 {
+		t.Fatalf("expected movie 2 (relative-suffix beats basename), got %+v", own.movie)
+	}
+	if own.movieFileID != 202 {
+		t.Errorf("movieFileID = %d; want 202 (the stronger match carries a file id)", own.movieFileID)
+	}
+}
+
 func TestResolveRadarrOwnership_LookupErrorFailsClosed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Targeted id lookup errors out.

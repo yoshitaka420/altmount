@@ -91,6 +91,10 @@ func (m *Manager) resolveRadarrOwnership(ctx context.Context, client *radarr.Rad
 			return own, fmt.Errorf("failed to get movies from Radarr: %w", err)
 		}
 
+		// weakBasenameMovie holds a filename-only match: usable to re-search but too
+		// weak to delete a file on, so a stronger path-based match wins if found.
+		var weakBasenameMovie *radarr.Movie
+
 		for _, movie := range movies {
 			requestFileName := filepath.Base(filePath)
 
@@ -101,19 +105,13 @@ func (m *Manager) resolveRadarrOwnership(ctx context.Context, client *radarr.Rad
 					break
 				}
 
-				movieFileName := filepath.Base(movie.MovieFile.Path)
-				if movieFileName == requestFileName {
-					// Filename-only match: identify the movie so we can re-search it,
-					// but deliberately leave movieFileID unset. A shared basename
-					// (e.g. the same file name under a different movie, or a renamed
-					// replacement) is too weak an identity to justify deleting the
-					// movie file — that would risk removing a healthy copy. The repair
-					// path treats movieFileID==0 as "skip blocklist/delete, search only".
-					slog.InfoContext(ctx, "Found Radarr movie match by filename (search-only; too weak to delete file)",
-						"movie", movie.Title,
-						"path", movie.MovieFile.Path)
-					own.movie = movie
-					break
+				// Filename-only match: too weak to delete a file on (a shared basename
+				// could be a different movie, or a renamed replacement). Remember the
+				// first one as a search-only fallback but keep scanning — a stronger
+				// path-based match (.strm / relative-suffix, which carry a movieFileID)
+				// later in this loop or on a later movie must take priority.
+				if weakBasenameMovie == nil && filepath.Base(movie.MovieFile.Path) == requestFileName {
+					weakBasenameMovie = movie
 				}
 
 				if before, ok := strings.CutSuffix(filePath, ".strm"); ok {
@@ -137,6 +135,16 @@ func (m *Manager) resolveRadarrOwnership(ctx context.Context, client *radarr.Rad
 					}
 				}
 			}
+		}
+
+		// No exact / .strm / relative-suffix match: fall back to the filename-only
+		// match if one was found. movieFileID stays 0, so the repair path re-searches
+		// without deleting a file matched on basename alone.
+		if own.movie == nil && weakBasenameMovie != nil {
+			slog.InfoContext(ctx, "Found Radarr movie match by filename (search-only; too weak to delete file)",
+				"movie", weakBasenameMovie.Title,
+				"path", weakBasenameMovie.MovieFile.Path)
+			own.movie = weakBasenameMovie
 		}
 	}
 
