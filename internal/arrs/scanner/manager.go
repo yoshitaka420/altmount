@@ -294,9 +294,12 @@ func (m *Manager) sonarrHasFile(ctx context.Context, client *sonarr.Sonarr, inst
 	strippedRelative := strings.TrimSuffix(relativePath, ".strm")
 
 	for _, series := range seriesList {
-		// Check if the series folder name is part of the relative path
+		// Check if the series folder name is part of the relative path, anchored at
+		// a path-component boundary so a shorter name can't match inside a longer
+		// sibling (e.g. "Show" must not match "Showcase") and route to the wrong
+		// instance.
 		folderName := filepath.Base(series.Path)
-		if strings.Contains(relativePath, folderName) || strings.Contains(strippedRelative, folderName) {
+		if pathContainsDir(relativePath, folderName) || pathContainsDir(strippedRelative, folderName) {
 			return true
 		}
 	}

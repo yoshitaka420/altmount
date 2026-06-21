@@ -414,3 +414,33 @@ func TestTriggerSonarrRescanByPath_RelativePathFallbackRejectsSibling(t *testing
 		t.Errorf("episode file(s) deleted = %v; want none", deletedFileIDs)
 	}
 }
+
+// TestSonarrHasFile_RejectsSiblingFolder verifies the instance-routing folder-name
+// check is anchored at a path-component boundary: a file under "Showcase" must not
+// be reported as owned by an instance that only has the "Show" series, since "Show"
+// is a substring of "Showcase".
+func TestSonarrHasFile_RejectsSiblingFolder(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/series") {
+			_, _ = w.Write([]byte(`[{"id":1,"title":"Show","path":"/data/tv/Show"}]`))
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.String())
+		http.Error(w, "unexpected", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{MountPath: "/mnt/lib"}
+	mgr := NewManager(func() *config.Config { return cfg }, nil, nil, data.NewManager(), nil)
+	client := sonarr.New(&starr.Config{URL: srv.URL, APIKey: "test", Client: srv.Client()})
+
+	// Sibling: file belongs to "Showcase" but only "Show" exists -> must NOT match.
+	if mgr.sonarrHasFile(context.Background(), client, "sonarr1", "Showcase/Season 01/Showcase.S01E01.mkv") {
+		t.Error("sonarrHasFile matched a Showcase file against the Show series (sibling substring); want no match")
+	}
+	// Genuine: file actually belongs to "Show" -> must match.
+	if !mgr.sonarrHasFile(context.Background(), client, "sonarr1", "Show/Season 01/Show.S01E01.mkv") {
+		t.Error("sonarrHasFile did not match a genuine Show file; want match")
+	}
+}
