@@ -647,7 +647,12 @@ func (m *Manager) triggerRadarrRescanByPath(ctx context.Context, client *radarr.
 	// removed and re-added in Radarr (the re-added movie gets a new internal id),
 	// and a rename in Radarr defeats the path-based guessing above. tmdbId is
 	// immutable across remove+re-add, so resolve the movie directly by it before
-	// giving up, then proceed with the normal delete/blocklist + search flow.
+	// giving up. The targeted lookup is fresh (the path match above runs against a
+	// 10-min cache that can lag a just-re-added movie), so re-confirm the path here
+	// and only delete the current file when it is positively the corrupt target.
+	// When the movie instead carries a file at a different path, it is a healthy
+	// replacement (or a rename we cannot prove is corrupt) and must NOT be deleted:
+	// fall through with targetMovieFileID == 0 to a non-destructive re-search.
 	if targetMovie == nil && metadata != nil && metadata.Movie != nil && metadata.Movie.TmdbId > 0 {
 		slog.InfoContext(ctx, "ID and path match failed, resolving Radarr movie by stable tmdbId",
 			"instance", instanceName,
@@ -661,16 +666,47 @@ func (m *Manager) triggerRadarrRescanByPath(ctx context.Context, client *radarr.
 				"error", err)
 		} else if len(movies) > 0 {
 			targetMovie = movies[0]
-			// Use the current movie's file id (the stale metadata.MovieFile.Id no
-			// longer applies after a re-add). May be 0 if the movie has no file.
+
 			if targetMovie.HasFile && targetMovie.MovieFile != nil {
-				targetMovieFileID = targetMovie.MovieFile.ID
+				moviePath := targetMovie.MovieFile.Path
+
+				// Confirm the current file IS the corrupt target using the same
+				// path heuristics as the cached path match above (exact, filename,
+				// .strm-stripped, relative-suffix), now against fresh data.
+				isCorruptTarget := moviePath == filePath ||
+					filepath.Base(moviePath) == filepath.Base(filePath)
+				if !isCorruptTarget {
+					if before, ok := strings.CutSuffix(filePath, ".strm"); ok {
+						if strings.TrimSuffix(moviePath, filepath.Ext(moviePath)) == before {
+							isCorruptTarget = true
+						}
+					}
+				}
+				if !isCorruptTarget && relativePath != "" {
+					strippedRelative := strings.TrimSuffix(relativePath, ".strm")
+					if strings.HasSuffix(moviePath, relativePath) ||
+						strings.HasSuffix(strings.TrimSuffix(moviePath, filepath.Ext(moviePath)), strippedRelative) {
+						isCorruptTarget = true
+					}
+				}
+
+				if isCorruptTarget {
+					targetMovieFileID = targetMovie.MovieFile.ID
+				} else {
+					slog.InfoContext(ctx, "tmdbId fallback: movie has a file at a different path (healthy replacement or rename), re-searching without deleting",
+						"instance", instanceName,
+						"movie_id", targetMovie.ID,
+						"current_file", moviePath,
+						"corrupt_target", filePath)
+				}
 			}
+
 			slog.InfoContext(ctx, "Resolved Radarr movie by tmdbId fallback",
 				"instance", instanceName,
 				"tmdb_id", metadata.Movie.TmdbId,
 				"movie_id", targetMovie.ID,
-				"movie_title", targetMovie.Title)
+				"movie_title", targetMovie.Title,
+				"will_delete_file", targetMovieFileID > 0)
 		}
 	}
 
