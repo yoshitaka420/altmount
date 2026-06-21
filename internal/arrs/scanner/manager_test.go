@@ -2,11 +2,20 @@ package scanner
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/javi11/altmount/internal/arrs/clients"
+	"github.com/javi11/altmount/internal/arrs/data"
 	"github.com/javi11/altmount/internal/arrs/instances"
 	"github.com/javi11/altmount/internal/config"
+	"golift.io/starr"
+	"golift.io/starr/sonarr"
 )
 
 func TestParseSonarrSeasonEpisode(t *testing.T) {
@@ -169,6 +178,136 @@ func TestFindInstanceForFilePath_CategoryMatch(t *testing.T) {
 			}
 			if gotName != tt.wantName {
 				t.Errorf("gotName = %q; want %q", gotName, tt.wantName)
+			}
+		})
+	}
+}
+
+// TestTriggerSonarrRescanByPath_FallbackDoesNotDeleteHealthyFile exercises the
+// season/episode fallback delete path directly. It is reached only when the
+// metadata file ID and the file path/filename fail to match the file we were
+// asked to repair, but the parsed SxxExx still matches an episode Sonarr owns.
+// Because a SxxExx-only match cannot prove Sonarr's current file is the
+// stale/corrupt record (rather than a healthy rename / re-import / upgrade at a
+// new path), the fallback must blocklist + re-search but MUST NOT delete the
+// current episode file. This guards against silently regressing back to deleting
+// a possibly-healthy replacement.
+func TestTriggerSonarrRescanByPath_FallbackDoesNotDeleteHealthyFile(t *testing.T) {
+	const (
+		episodeID     = int64(101)
+		currentFileID = int64(201)
+	)
+
+	tests := []struct {
+		name        string
+		repairPath  string // path AltMount asks to repair (stale/corrupt)
+		currentPath string // path Sonarr currently owns for S01E01 (healthy)
+	}{
+		{
+			name:        "renamed file",
+			repairPath:  "/tv/Show/Season 01/Show.S01E01.OLDNAME.mkv",
+			currentPath: "/tv/Show/Season 01/Show.S01E01.RENAMED.mkv",
+		},
+		{
+			name:        "re-imported file",
+			repairPath:  "/tv/Show/Season 01/Show.S01E01.WEB.mkv",
+			currentPath: "/tv/Show/Season 01/Show.S01E01.WEB-DL.REPACK.mkv",
+		},
+		{
+			name:        "healthy upgrade at new path",
+			repairPath:  "/tv/Show/Season 01/Show.S01E01.720p.mkv",
+			currentPath: "/tv/Show/Season 01/Show.S01E01.2160p.PROPER.mkv",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// grabHistoryID is the "grabbed" history record that blocklisting must
+			// mark as failed (POST /history/failed/{id}) so the re-search can't
+			// simply re-grab the same dead release.
+			const grabHistoryID = "777"
+
+			var (
+				mu                    sync.Mutex
+				deletedFileIDs        []string
+				blocklistedHistoryIDs []string
+				searchCmdName         string
+				searchedEpIDs         []int64
+			)
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				p := r.URL.Path
+				switch {
+				case r.Method == http.MethodDelete && strings.Contains(p, "/episodeFile/"):
+					mu.Lock()
+					deletedFileIDs = append(deletedFileIDs, p[strings.LastIndex(p, "/")+1:])
+					mu.Unlock()
+					_, _ = w.Write([]byte(`{}`))
+				case strings.HasSuffix(p, "/series"):
+					_, _ = w.Write([]byte(`[{"id":1,"title":"Show","path":"/tv/Show"}]`))
+				case strings.HasSuffix(p, "/episodeFile"):
+					_, _ = w.Write([]byte(fmt.Sprintf(`[{"id":%d,"seriesId":1,"path":%q}]`, currentFileID, tt.currentPath)))
+				case strings.HasSuffix(p, "/episode"):
+					_, _ = w.Write([]byte(fmt.Sprintf(`[{"id":%d,"seriesId":1,"seasonNumber":1,"episodeNumber":1,"hasFile":true,"episodeFileId":%d}]`, episodeID, currentFileID)))
+				case strings.HasSuffix(p, "/queue"):
+					_, _ = w.Write([]byte(`{"page":1,"pageSize":500,"sortKey":"timeleft","sortDirection":"ascending","totalRecords":0,"records":[]}`))
+				case r.Method == http.MethodPost && strings.Contains(p, "/history/failed/"):
+					mu.Lock()
+					blocklistedHistoryIDs = append(blocklistedHistoryIDs, p[strings.LastIndex(p, "/")+1:])
+					mu.Unlock()
+					_, _ = w.Write([]byte(`{}`))
+				case strings.HasSuffix(p, "/history"):
+					// Import event links the current file to a download; grab event is
+					// what blocklisting marks as failed.
+					_, _ = w.Write([]byte(fmt.Sprintf(`{"page":1,"pageSize":100,"sortKey":"date","sortDirection":"descending","totalRecords":2,"records":[`+
+						`{"id":1,"eventType":"downloadFolderImported","downloadId":"abc","data":{"fileId":"%d"}},`+
+						`{"id":%s,"eventType":"grabbed","downloadId":"abc"}]}`, currentFileID, grabHistoryID)))
+				case r.Method == http.MethodPost && strings.HasSuffix(p, "/command"):
+					var cmd struct {
+						Name       string  `json:"name"`
+						EpisodeIDs []int64 `json:"episodeIds"`
+					}
+					_ = json.NewDecoder(r.Body).Decode(&cmd)
+					mu.Lock()
+					searchCmdName = cmd.Name
+					searchedEpIDs = cmd.EpisodeIDs
+					mu.Unlock()
+					_, _ = w.Write([]byte(`{"id":555}`))
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.String())
+					http.Error(w, "unexpected", http.StatusNotFound)
+				}
+			}))
+			defer srv.Close()
+
+			cfg := &config.Config{MountPath: "/tv"}
+			mgr := NewManager(func() *config.Config { return cfg }, nil, nil, data.NewManager(), nil)
+			client := sonarr.New(&starr.Config{URL: srv.URL, APIKey: "test", Client: srv.Client()})
+
+			err := mgr.triggerSonarrRescanByPath(context.Background(), client, tt.repairPath, "", "sonarr1", nil)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			// The guard: the healthy file Sonarr currently owns must NOT be deleted.
+			if len(deletedFileIDs) != 0 {
+				t.Errorf("episode file(s) deleted = %v; want none (healthy replacement must be preserved)", deletedFileIDs)
+			}
+			// The dead release must still be blocklisted so the re-search below
+			// won't simply re-grab it.
+			if len(blocklistedHistoryIDs) != 1 || blocklistedHistoryIDs[0] != grabHistoryID {
+				t.Errorf("blocklisted history IDs = %v; want [%s]", blocklistedHistoryIDs, grabHistoryID)
+			}
+			// Recovery must still happen via a targeted re-search of the matched episode.
+			if searchCmdName != "EpisodeSearch" {
+				t.Errorf("search command = %q; want EpisodeSearch", searchCmdName)
+			}
+			if len(searchedEpIDs) != 1 || searchedEpIDs[0] != episodeID {
+				t.Errorf("searched episode IDs = %v; want [%d]", searchedEpIDs, episodeID)
 			}
 		})
 	}

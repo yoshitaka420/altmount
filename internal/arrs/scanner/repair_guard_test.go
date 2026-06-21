@@ -2,7 +2,6 @@ package scanner
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -65,16 +64,18 @@ func newSonarrRepairServer(t *testing.T, rec *sonarrRepairRecorder, episodeFileP
 	}))
 }
 
-// TestTriggerSonarrRescanByPath_FallbackGuardsHealthyReplacement is the regression
-// test for the season/episode-fallback delete: when metadata reports the corrupted
+// TestTriggerSonarrRescanByPath_FallbackGuardsHealthyReplacement is a regression
+// test for the season/episode fallback: when metadata reports the corrupted
 // episode-file id but the episode now points at a DIFFERENT file (a healthy
-// upgrade/re-import), the fallback must NOT delete that replacement. It should bail
-// with ErrEpisodeAlreadySatisfied and issue no delete/search.
+// upgrade/re-import), the fallback must NOT delete that replacement. A SxxExx-only
+// match is too weak to prove the current file is the stale/corrupt record, so the
+// file is left in place and recovery relies on a targeted re-search — never a
+// delete.
 func TestTriggerSonarrRescanByPath_FallbackGuardsHealthyReplacement(t *testing.T) {
 	rec := &sonarrRepairRecorder{}
 	// Episode's current file id 200 differs from the reported corrupted id 100,
-	// and its path differs from the requested path so the id-path Smart Repair
-	// Guard does not catch it first — the season/episode fallback is reached.
+	// and its path differs from the requested path so the id-path resolution does
+	// not catch it first — the season/episode fallback is reached.
 	srv := newSonarrRepairServer(t, rec, "/tv/Show/Season 01/Show.S01E01.REPACK.mkv", 200)
 	defer srv.Close()
 
@@ -87,27 +88,29 @@ func TestTriggerSonarrRescanByPath_FallbackGuardsHealthyReplacement(t *testing.T
 	err := mgr.triggerSonarrRescanByPath(
 		context.Background(), newSonarrClient(srv),
 		"/tv/Show/Season 01/Show.S01E01.mkv", "", "sonarr1", meta)
-
-	if !errors.Is(err, model.ErrEpisodeAlreadySatisfied) {
-		t.Fatalf("err = %v; want ErrEpisodeAlreadySatisfied", err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
+	// The guard: the healthy file Sonarr currently owns must NOT be deleted.
 	if len(rec.deletedFileIDs) != 0 {
 		t.Errorf("episode file(s) deleted = %v; want none (healthy replacement must be preserved)", rec.deletedFileIDs)
 	}
-	if rec.searchCalled {
-		t.Errorf("search command was issued; want none (repair must be skipped)")
+	// Recovery still happens via a targeted re-search rather than a delete.
+	if !rec.searchCalled {
+		t.Errorf("search command was not issued; want a re-search to drive recovery")
 	}
 }
 
-// TestTriggerSonarrRescanByPath_FallbackDeletesWhenNoReportedFileID proves the guard
-// is targeted, not a blanket disable: with no reported episode-file id to compare
-// against (a pure path/scene fallback), the season/episode fallback still deletes the
-// stale record and re-searches.
-func TestTriggerSonarrRescanByPath_FallbackDeletesWhenNoReportedFileID(t *testing.T) {
+// TestTriggerSonarrRescanByPath_FallbackBlocklistsWithoutDeleteWhenNoReportedFileID
+// proves the fallback never deletes even when there is no reported episode-file id
+// to compare against (a pure path/scene fallback): the SxxExx match alone cannot
+// distinguish a stale record from a healthy rename/re-import, so the file is left
+// in place and recovery relies on blocklist + re-search.
+func TestTriggerSonarrRescanByPath_FallbackBlocklistsWithoutDeleteWhenNoReportedFileID(t *testing.T) {
 	rec := &sonarrRepairRecorder{}
 	// The current file's path does not match the requested path (a Sonarr rename),
-	// so path/filename resolution fails and the season/episode fallback runs. With
-	// no metadata file id, the guard does not apply and the delete proceeds.
+	// so path/filename resolution fails and the season/episode fallback runs. Even
+	// with no metadata file id, the fallback must not delete the current file.
 	srv := newSonarrRepairServer(t, rec, "/tv/Show/Season 01/Show.S01E01.RENAMED.mkv", 200)
 	defer srv.Close()
 
@@ -119,10 +122,10 @@ func TestTriggerSonarrRescanByPath_FallbackDeletesWhenNoReportedFileID(t *testin
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(rec.deletedFileIDs) != 1 || rec.deletedFileIDs[0] != "200" {
-		t.Errorf("deleted file ids = %v; want [200]", rec.deletedFileIDs)
+	if len(rec.deletedFileIDs) != 0 {
+		t.Errorf("episode file(s) deleted = %v; want none (recovery must rely on re-search, not delete)", rec.deletedFileIDs)
 	}
 	if !rec.searchCalled {
-		t.Errorf("search command was not issued; want a re-search after the fallback delete")
+		t.Errorf("search command was not issued; want a re-search after the blocklist-only fallback")
 	}
 }

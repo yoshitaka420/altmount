@@ -792,46 +792,20 @@ func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.
 					"has_file", ep.HasFile,
 					"episode_file_id", ep.EpisodeFileID)
 
-				// Smart Repair Guard (season/episode fallback): when metadata told us
-				// the exact episode-file id that was reported corrupted and the episode
-				// now points at a DIFFERENT file, that file is a healthy replacement
-				// (an upgrade or re-import), not the corrupted one. Deleting it would
-				// destroy a good copy, so treat the episode as already satisfied and
-				// skip the destructive repair. If the ids are equal the episode still
-				// holds the original corrupted record (e.g. renamed in place), so we
-				// fall through and proceed with the delete below.
-				if metadata != nil && metadata.EpisodeFile != nil && metadata.EpisodeFile.Id > 0 &&
-					ep.EpisodeFileID != metadata.EpisodeFile.Id {
-					slog.InfoContext(ctx, "Smart Repair Guard: Sonarr episode now has a different file than the one reported corrupted (likely upgraded). Skipping fallback delete.",
-						"series_title", targetSeriesTitle,
-						"season", season,
-						"episode", episode,
-						"reported_file_id", metadata.EpisodeFile.Id,
-						"current_file_id", ep.EpisodeFileID)
-					return model.ErrEpisodeAlreadySatisfied
-				}
-
-				// If Sonarr still owns a (dead) file for this episode, blocklist the
-				// release and delete the stale file record before re-searching.
+				// If Sonarr still owns a file for this episode, blocklist its release so
+				// the targeted re-search below won't simply re-grab the same dead release.
 				//
-				// Safety: the guard above already bailed whenever metadata gave us the
-				// corrupted episode-file id and the episode now points at a different
-				// (replacement) file. So the delete below only runs when we had no
-				// reported file id to compare against — a pure path/scene fallback —
-				// where we trust the stable SeasonNumber+EpisodeNumber parsed from the
-				// path. The common case is a Sonarr rename that left the stored path
-				// stale; dailies, anime absolute numbering, and multi-episode files are
-				// deliberately left unmatched upstream.
+				// We deliberately do NOT delete the episode file here. This branch is
+				// reached only because the metadata file ID and the file path/filename did
+				// NOT line up with the file we were asked to repair — we matched purely on
+				// the parsed season/episode. That identity is too weak to prove the file
+				// Sonarr currently owns is the stale/corrupt record rather than a healthy
+				// replacement (for example an upgrade imported at a new path). Deleting on
+				// that basis could remove a good copy, so the file is left in place and
+				// recovery relies on the targeted re-search alone.
 				if ep.HasFile && ep.EpisodeFileID > 0 {
 					if err := m.blocklistSonarrEpisodeFile(ctx, client, targetSeriesID, ep.EpisodeFileID); err != nil {
 						slog.WarnContext(ctx, "Failed to blocklist Sonarr release", "error", err)
-					}
-
-					if err := client.DeleteEpisodeFileContext(ctx, ep.EpisodeFileID); err != nil {
-						slog.WarnContext(ctx, "Failed to delete episode file from Sonarr, continuing with search",
-							"instance", instanceName,
-							"episode_file_id", ep.EpisodeFileID,
-							"error", err)
 					}
 				}
 
