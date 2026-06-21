@@ -786,7 +786,7 @@ func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.
 		// Find the series that contains this file path
 		var targetSeries *sonarr.Series
 		for _, show := range series {
-			if strings.Contains(filePath, show.Path) {
+			if pathContainsDir(filePath, show.Path) {
 				targetSeries = show
 				break
 			}
@@ -968,18 +968,20 @@ func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.
 					"has_file", ep.HasFile,
 					"episode_file_id", ep.EpisodeFileID)
 
-				// If Sonarr still owns a (dead) file for this episode, blocklist the
-				// release and delete the stale file record before re-searching.
+				// If Sonarr still owns a file for this episode, blocklist its release so
+				// the targeted re-search below won't simply re-grab the same dead release.
+				//
+				// We deliberately do NOT delete the episode file here. This branch is
+				// reached only because the metadata file ID and the file path/filename did
+				// NOT line up with the file we were asked to repair — we matched purely on
+				// the parsed season/episode. That identity is too weak to prove the file
+				// Sonarr currently owns is the stale/corrupt record rather than a healthy
+				// replacement (for example an upgrade imported at a new path). Deleting on
+				// that basis could remove a good copy, so the file is left in place and
+				// recovery relies on the targeted re-search alone.
 				if ep.HasFile && ep.EpisodeFileID > 0 {
 					if err := m.blocklistSonarrEpisodeFile(ctx, client, targetSeriesID, ep.EpisodeFileID); err != nil {
 						slog.WarnContext(ctx, "Failed to blocklist Sonarr release", "error", err)
-					}
-
-					if err := client.DeleteEpisodeFileContext(ctx, ep.EpisodeFileID); err != nil {
-						slog.WarnContext(ctx, "Failed to delete episode file from Sonarr, continuing with search",
-							"instance", instanceName,
-							"episode_file_id", ep.EpisodeFileID,
-							"error", err)
 					}
 				}
 
