@@ -711,6 +711,35 @@ func (m *Manager) triggerRadarrRescanByPath(ctx context.Context, client *radarr.
 	return nil
 }
 
+// parseSonarrSeasonEpisode extracts a single season/episode pair from a file
+// path's SxxExx token. It returns ok=false for daily (date-based) episodes,
+// anime absolute numbering (no SxxExx token), and multi-episode files — those
+// need richer handling than a single season/episode pair can safely provide and
+// are intentionally left for manual repair.
+func parseSonarrSeasonEpisode(path string) (season, episode int, ok bool) {
+	name := filepath.Base(path)
+	if tvMultiEpisodePattern.MatchString(name) {
+		return 0, 0, false
+	}
+
+	matches := tvSeasonPattern.FindStringSubmatch(name)
+	if len(matches) < 3 {
+		return 0, 0, false
+	}
+
+	season, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0, 0, false
+	}
+
+	episode, err = strconv.Atoi(matches[2])
+	if err != nil {
+		return 0, 0, false
+	}
+
+	return season, episode, true
+}
+
 // triggerSonarrRescanByPath triggers a rescan in Sonarr for the given file path
 func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.Sonarr, filePath, relativePath, instanceName string, metadata *model.WebhookMetadata) error {
 	slog.InfoContext(ctx, "Searching Sonarr for matching series",
@@ -757,17 +786,19 @@ func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.
 		// Find the series that contains this file path
 		var targetSeries *sonarr.Series
 		for _, show := range series {
-			if strings.Contains(filePath, show.Path) {
+			if pathContainsDir(filePath, show.Path) {
 				targetSeries = show
 				break
 			}
 		}
 
 		if targetSeries == nil {
-			// Fallback search for series using relative path
+			// Fallback search for series using relative path. Match the series
+			// folder name at a path-component boundary so a shorter name can't
+			// match inside a longer sibling (e.g. "Show" must not match "Showcase").
 			for _, show := range series {
 				showFolderName := filepath.Base(show.Path)
-				if strings.Contains(relativePath, showFolderName) {
+				if pathContainsDir(relativePath, showFolderName) {
 					slog.InfoContext(ctx, "Found series match by folder name", "series", show.Title, "folder", showFolderName)
 					targetSeries = show
 					break
@@ -909,6 +940,56 @@ func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.
 		// Fallback: search in Sonarr download queue
 		if err := m.failSonarrQueueItemByPath(ctx, client, filePath); err == nil {
 			return nil
+		}
+	}
+
+	// Season/Episode fallback: when neither the metadata EpisodeFile.Id nor the
+	// path/filename matched a file record (both go stale on a Sonarr rename or
+	// re-import), fall back to the stable SeasonNumber+EpisodeNumber parsed from
+	// the path against the already-fetched episodes list. This recovers the
+	// common case where Sonarr still owns the episode (HasFile=true) but the file
+	// record no longer lines up with our stored path, which otherwise dead-ends in
+	// ErrPathMatchFailed and a permanently corrupted record. Dailies, anime
+	// absolute numbering, and multi-episode files are deliberately left unmatched.
+	if len(episodeIDs) == 0 {
+		season, episode, ok := parseSonarrSeasonEpisode(filePath)
+		if !ok && relativePath != "" {
+			season, episode, ok = parseSonarrSeasonEpisode(relativePath)
+		}
+
+		if ok {
+			for _, ep := range episodes {
+				if ep.SeasonNumber != season || ep.EpisodeNumber != episode {
+					continue
+				}
+
+				slog.InfoContext(ctx, "Found Sonarr episode by season/episode fallback",
+					"series_title", targetSeriesTitle,
+					"season", season,
+					"episode", episode,
+					"has_file", ep.HasFile,
+					"episode_file_id", ep.EpisodeFileID)
+
+				// If Sonarr still owns a file for this episode, blocklist its release so
+				// the targeted re-search below won't simply re-grab the same dead release.
+				//
+				// We deliberately do NOT delete the episode file here. This branch is
+				// reached only because the metadata file ID and the file path/filename did
+				// NOT line up with the file we were asked to repair — we matched purely on
+				// the parsed season/episode. That identity is too weak to prove the file
+				// Sonarr currently owns is the stale/corrupt record rather than a healthy
+				// replacement (for example an upgrade imported at a new path). Deleting on
+				// that basis could remove a good copy, so the file is left in place and
+				// recovery relies on the targeted re-search alone.
+				if ep.HasFile && ep.EpisodeFileID > 0 {
+					if err := m.blocklistSonarrEpisodeFile(ctx, client, targetSeriesID, ep.EpisodeFileID); err != nil {
+						slog.WarnContext(ctx, "Failed to blocklist Sonarr release", "error", err)
+					}
+				}
+
+				episodeIDs = append(episodeIDs, ep.ID)
+				break
+			}
 		}
 	}
 
