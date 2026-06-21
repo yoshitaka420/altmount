@@ -1,8 +1,15 @@
 package scanner
 
 import (
+	"context"
+	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
+
+	"github.com/javi11/altmount/internal/arrs/model"
+	"golift.io/starr/radarr"
+	"golift.io/starr/sonarr"
 )
 
 // radarrOwnership is the read-only result of resolving which Radarr movie (if
@@ -338,4 +345,19 @@ func pathContainsDir(p, dir string) bool {
 		}
 		i = i + idx + 1
 	}
+}
+
+// hasPathComponent reports whether comp appears as a whole, slash-delimited path
+// component of p, so a folder name like "Show" matches "Show/..." but not
+// "Showtime/..." or "My Show Extra/...".
+func hasPathComponent(p, comp string) bool {
+	if comp == "" {
+		return false
+	}
+	for _, part := range strings.Split(filepath.ToSlash(p), "/") {
+		if part == comp {
+			return true
+		}
+	}
+	return false
 }
