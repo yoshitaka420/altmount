@@ -16,12 +16,14 @@ import (
 type fakeStore struct {
 	listResp  []*database.FileHealth
 	listErr   error
+	gotLimit  int                              // captures the limit passed to the most recent ListCorrupted call
 	status    map[string]database.HealthStatus // overrides; default == corrupted
 	deleted   []string
 	deleteErr error
 }
 
 func (f *fakeStore) ListCorrupted(ctx context.Context, limit int) ([]*database.FileHealth, error) {
+	f.gotLimit = limit
 	return f.listResp, f.listErr
 }
 
@@ -307,6 +309,11 @@ func TestSweep_UsesStoreList(t *testing.T) {
 	st, err := svc.Sweep(context.Background())
 	if err != nil {
 		t.Fatalf("sweep error: %v", err)
+	}
+	// Sweep must fetch threshold+1 so the mass-event abort can see a flood rather
+	// than a silently-truncated list.
+	if store.gotLimit != 501 {
+		t.Errorf("ListCorrupted limit = %d; want 501 (mass_event_threshold 500 + 1)", store.gotLimit)
 	}
 	if st.Deleted != 1 || st.SkippedOwned != 1 {
 		t.Fatalf("got deleted=%d skippedOwned=%d; want 1/1", st.Deleted, st.SkippedOwned)
