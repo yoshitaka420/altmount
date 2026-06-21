@@ -187,6 +187,34 @@ func TestResolveOwnership_SonarrReplaced(t *testing.T) {
 	}
 }
 
+func TestResolveOwnership_SonarrSeriesOwnedNoFileSkipsEpisodeFetch(t *testing.T) {
+	// Series matches by path but no episode-file record lines up (episodeFileID == 0).
+	// The dispatcher must short-circuit to Owned WITHOUT fetching episodes.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/series"):
+			_, _ = w.Write([]byte(`[{"id":12,"title":"Breaking Bad","path":"/tv/Breaking Bad"}]`))
+		case strings.HasSuffix(r.URL.Path, "/episodeFile") && r.URL.Query().Get("seriesId") == "12":
+			// A file record exists but does not match our path/filename.
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/tv/Breaking Bad/Season 01/Unrelated.mkv"}]`))
+		case strings.HasSuffix(r.URL.Path, "/episode"):
+			t.Errorf("episodes must NOT be fetched when episodeFileID == 0: %s", r.URL.String())
+		default:
+			t.Errorf("unexpected request: %s", r.URL.String())
+		}
+	}))
+	defer srv.Close()
+
+	mgr := dispatchManager(srv, "sonarr", "sonarr1")
+	meta := &model.WebhookMetadata{InstanceName: "sonarr1"}
+
+	got := mgr.ResolveOwnership(context.Background(),
+		"/tv/Breaking Bad/Season 01/Breaking Bad S01E01.mkv", "", meta)
+	if got.Status != model.OwnershipOwned {
+		t.Fatalf("status = %v; want owned (series owns the area, no file record)", got.Status)
+	}
+}
+
 func TestResolveOwnership_SonarrUnowned(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Path-based with no series match.

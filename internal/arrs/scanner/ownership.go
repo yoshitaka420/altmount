@@ -221,7 +221,7 @@ func (m *Manager) resolveSonarrOwnership(ctx context.Context, client *sonarr.Son
 
 	var targetSeries *sonarr.Series
 	for _, show := range series {
-		if pathUnderDir(filePath, show.Path) {
+		if pathContainsDir(filePath, show.Path) {
 			targetSeries = show
 			break
 		}
@@ -230,7 +230,7 @@ func (m *Manager) resolveSonarrOwnership(ctx context.Context, client *sonarr.Son
 	if targetSeries == nil {
 		for _, show := range series {
 			showFolderName := filepath.Base(show.Path)
-			if strings.Contains(relativePath, showFolderName) {
+			if hasPathComponent(relativePath, showFolderName) {
 				slog.InfoContext(ctx, "Found series match by folder name", "series", show.Title, "folder", showFolderName)
 				targetSeries = show
 				break
@@ -297,19 +297,44 @@ func (m *Manager) resolveSonarrOwnership(ctx context.Context, client *sonarr.Son
 	return own, nil
 }
 
-// pathUnderDir reports whether filePath lies under dir, anchoring the match to a
-// path-separator boundary so overlapping sibling names never collide (e.g.
-// "/tv/Show" matches "/mnt/media/tv/Show/S01E01.mkv" but NOT "/tv/Showcase/...").
-//
-// It uses substring containment rather than a strict prefix because AltMount's
-// mount path and the *arr's library path can differ in their leading components;
-// the trailing separator on dir is what prevents "/tv/Show" from matching
-// "/tv/Showcase".
-func pathUnderDir(filePath, dir string) bool {
-	f := filepath.ToSlash(filePath)
-	d := strings.TrimRight(filepath.ToSlash(dir), "/")
-	if d == "" {
+// pathContainsDir reports whether dir occurs in p terminated at a path-component
+// boundary (the next character is a separator or end of string). This keeps the
+// original lenient "appears anywhere" behavior across differing path prefixes
+// while preventing a sibling directory from matching by raw substring (e.g.
+// "/tv/Show" must not match "/tv/Showtime/...").
+func pathContainsDir(p, dir string) bool {
+	p = filepath.ToSlash(p)
+	// Trim any trailing separators so the component-boundary check below lines up
+	// with the end of the matched directory (e.g. dir "/tv/Show/" must still
+	// match "/tv/Show/ep.mkv").
+	dir = strings.TrimRight(filepath.ToSlash(dir), "/")
+	if dir == "" {
 		return false
 	}
-	return f == d || strings.Contains(f, d+"/")
+	for i := 0; ; {
+		idx := strings.Index(p[i:], dir)
+		if idx < 0 {
+			return false
+		}
+		end := i + idx + len(dir)
+		if end == len(p) || p[end] == '/' {
+			return true
+		}
+		i = i + idx + 1
+	}
+}
+
+// hasPathComponent reports whether comp appears as a whole, slash-delimited path
+// component of p, so a folder name like "Show" matches "Show/..." but not
+// "Showtime/..." or "My Show Extra/...".
+func hasPathComponent(p, comp string) bool {
+	if comp == "" {
+		return false
+	}
+	for _, part := range strings.Split(filepath.ToSlash(p), "/") {
+		if part == comp {
+			return true
+		}
+	}
+	return false
 }
