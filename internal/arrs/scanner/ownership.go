@@ -303,11 +303,14 @@ func (m *Manager) resolveSonarrOwnership(ctx context.Context, client *sonarr.Son
 // while preventing a sibling directory from matching by raw substring (e.g.
 // "/tv/Show" must not match "/tv/Showtime/...").
 func pathContainsDir(p, dir string) bool {
+	p = filepath.ToSlash(p)
+	// Trim any trailing separators so the component-boundary check below lines up
+	// with the end of the matched directory (e.g. dir "/tv/Show/" must still
+	// match "/tv/Show/ep.mkv").
+	dir = strings.TrimRight(filepath.ToSlash(dir), "/")
 	if dir == "" {
 		return false
 	}
-	p = filepath.ToSlash(p)
-	dir = filepath.ToSlash(dir)
 	for i := 0; ; {
 		idx := strings.Index(p[i:], dir)
 		if idx < 0 {
