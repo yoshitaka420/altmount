@@ -276,3 +276,36 @@ func TestPathContainsDir(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveRadarrOwnership_IDFailsThenTMDBBeforeFullList(t *testing.T) {
+	// When the id lookup errors, the targeted TMDB lookup must be tried BEFORE the
+	// expensive full-list scan. The handler fails the test if /movie (no tmdbId)
+	// is ever hit.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/movie/42"):
+			http.Error(w, "boom", http.StatusInternalServerError)
+		case strings.HasSuffix(r.URL.Path, "/movie") && r.URL.Query().Get("tmdbId") == "603":
+			_, _ = w.Write([]byte(`[{"id":7,"title":"The Matrix","tmdbId":603,"hasFile":true,"movieFile":{"id":71,"path":"/movies/matrix.mkv"}}]`))
+		case strings.HasSuffix(r.URL.Path, "/movie"):
+			t.Errorf("full-list /movie scan must not run when targeted TMDB resolves: %s", r.URL.String())
+		default:
+			t.Errorf("unexpected request: %s", r.URL.String())
+		}
+	}))
+	defer srv.Close()
+
+	mgr := newResolverManager(nil)
+	meta := &model.WebhookMetadata{Movie: &model.MovieMetadata{Id: 42, TmdbId: 603}}
+
+	own, err := mgr.resolveRadarrOwnership(context.Background(), newRadarrClient(srv), "/movies/matrix.mkv", "", "radarr1", meta)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if own.movie == nil || own.movie.ID != 7 {
+		t.Fatalf("expected movie 7 resolved via targeted TMDB recovery, got %+v", own.movie)
+	}
+	if own.movieFileID != 71 {
+		t.Errorf("movieFileID = %d; want 71", own.movieFileID)
+	}
+}

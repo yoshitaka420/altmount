@@ -340,3 +340,31 @@ func TestAdaptiveInterval(t *testing.T) {
 		t.Errorf("floor: got %v; want 1m", got)
 	}
 }
+
+func TestProcessItem_MetaDeleteFailureNotReportedDeleted(t *testing.T) {
+	// The status-guarded row delete succeeds but .meta delete fails -> the file
+	// may remain visible, so triage must NOT report success.
+	store := &fakeStore{}
+	meta := &fakeMeta{deleteErr: errors.New("disk full")}
+	res := &fakeResolver{byPath: map[string]model.Ownership{"/a.mkv": {Status: model.OwnershipUnowned}}}
+	svc := NewService(cfgGetter(true, 50, 500), store, meta, res)
+
+	if svc.ProcessItem(context.Background(), corruptedItem("/a.mkv"), SourceEnterCorrupted) {
+		t.Fatal("ProcessItem must report false when .meta delete fails")
+	}
+	if len(store.deleted) != 1 {
+		t.Errorf("expected the health row to still be deleted (guarded delete ran), got %v", store.deleted)
+	}
+}
+
+func TestRun_MetaDeleteFailureCountsAsError(t *testing.T) {
+	store := &fakeStore{}
+	meta := &fakeMeta{deleteErr: errors.New("io error")}
+	res := &fakeResolver{byPath: map[string]model.Ownership{"/a": {Status: model.OwnershipUnowned}}}
+	svc := NewService(cfgGetter(true, 50, 500), store, meta, res)
+
+	st := svc.Run(context.Background(), []*database.FileHealth{corruptedItem("/a")}, SourceBackstop)
+	if st.Deleted != 0 || st.Errors != 1 {
+		t.Fatalf("deleted=%d errors=%d; want 0/1 (meta failure is an error, not a delete)", st.Deleted, st.Errors)
+	}
+}

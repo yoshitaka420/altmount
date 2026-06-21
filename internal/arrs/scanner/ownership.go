@@ -45,18 +45,22 @@ func (m *Manager) resolveRadarrOwnership(ctx context.Context, client *radarr.Rad
 	// of fetching the entire library (which can exceed the HTTP client timeout on
 	// large instances). Prefer the Radarr DB movie ID, then the TMDB ID.
 	if metadata != nil && metadata.Movie != nil {
-		switch {
-		case metadata.Movie.Id > 0:
+		// Targeted lookups, cheapest first: the Radarr DB id, then the stable TMDB
+		// id. Both are attempted before any full-library enumeration below, so an
+		// id-lookup failure still tries the targeted TMDB lookup rather than
+		// jumping straight to the expensive full-list scan.
+		if metadata.Movie.Id > 0 {
 			slog.InfoContext(ctx, "ID-Based Precision: Looking up Radarr movie by ID", "movie_id", metadata.Movie.Id)
 			movie, err := m.data.GetMovieByID(ctx, client, instanceName, metadata.Movie.Id)
 			if err != nil {
-				slog.WarnContext(ctx, "Targeted Radarr movie lookup by ID failed, falling back to path-based guessing",
+				slog.WarnContext(ctx, "Targeted Radarr movie lookup by ID failed, trying TMDB id then path-based guessing",
 					"movie_id", metadata.Movie.Id, "error", err)
 				own.lookupErr = true
 			} else {
 				own.movie = movie
 			}
-		case metadata.Movie.TmdbId > 0:
+		}
+		if own.movie == nil && metadata.Movie.TmdbId > 0 {
 			slog.InfoContext(ctx, "ID-Based Precision: Looking up Radarr movie by TMDB ID", "tmdb_id", metadata.Movie.TmdbId)
 			movie, err := m.data.GetMovieByTMDBID(ctx, client, instanceName, metadata.Movie.TmdbId)
 			if err != nil {

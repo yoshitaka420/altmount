@@ -326,6 +326,7 @@ export function HealthConfigSection({
 						<input
 							type="checkbox"
 							className="toggle toggle-warning mt-1 shrink-0"
+							aria-label="Enable corrupted-file triage"
 							checked={formData.corrupted_triage?.enabled ?? false}
 							disabled={isReadOnly}
 							onChange={(e) => handleTriageChange("enabled", e.target.checked)}
@@ -335,7 +336,7 @@ export function HealthConfigSection({
 					{formData.corrupted_triage?.enabled && (
 						<div className="fade-in slide-in-from-top-2 mt-6 animate-in border-base-300/50 border-t pt-6">
 							<div className="mb-6 flex gap-3 rounded-xl border border-warning/20 bg-warning/5 p-4">
-								<AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+								<AlertTriangle className="h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
 								<p className="min-w-0 flex-1 break-words text-[11px] text-base-content/70 leading-relaxed">
 									This deletes records permanently. It only acts on files owned by your *arr apps
 									(Radarr, Sonarr, Whisparr, Lidarr, Readarr) and skips anything it can't positively
