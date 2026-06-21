@@ -140,8 +140,11 @@ func TestResolveRadarrOwnership_PathMatchByFilename(t *testing.T) {
 	if own.movie == nil || own.movie.ID != 3 {
 		t.Fatalf("expected movie 3 by filename match, got %+v", own.movie)
 	}
-	if own.movieFileID != 33 {
-		t.Errorf("movieFileID = %d; want 33", own.movieFileID)
+	// A filename-only match identifies the movie (for re-search) but must NOT
+	// carry a movieFileID: deleting a file matched only by basename could remove a
+	// healthy copy, so the repair path is left to search-only (movieFileID == 0).
+	if own.movieFileID != 0 {
+		t.Errorf("movieFileID = %d; want 0 (basename match is search-only, no delete)", own.movieFileID)
 	}
 }
 
@@ -281,5 +284,108 @@ func TestResolveSonarrOwnership_NoSeriesMatch(t *testing.T) {
 	}
 	if own.seriesID != 0 {
 		t.Fatalf("seriesID = %d; want 0 (no match)", own.seriesID)
+	}
+}
+
+func TestPathContainsDir(t *testing.T) {
+	tests := []struct {
+		name string
+		p    string
+		dir  string
+		want bool
+	}{
+		{"exact match", "/tv/Show", "/tv/Show", true},
+		{"child path", "/tv/Show/Season 01/ep.mkv", "/tv/Show", true},
+		{"trailing slash on dir still matches", "/tv/Show/Season 01/ep.mkv", "/tv/Show/", true},
+		{"sibling rejected", "/tv/Showtime/ep.mkv", "/tv/Show", false},
+		{"cross-prefix child", "/downloads/tv/Show/ep.mkv", "/tv/Show", true},
+		{"no match", "/tv/Other/ep.mkv", "/tv/Show", false},
+		{"empty dir", "/tv/Show/ep.mkv", "", false},
+		{"root-only dir", "/tv/Show/ep.mkv", "/", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pathContainsDir(tt.p, tt.dir); got != tt.want {
+				t.Errorf("pathContainsDir(%q, %q) = %v; want %v", tt.p, tt.dir, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHasPathComponent(t *testing.T) {
+	tests := []struct {
+		name string
+		p    string
+		comp string
+		want bool
+	}{
+		{"whole component", "Show/Season 01/ep.mkv", "Show", true},
+		{"sibling prefix rejected", "Showtime/ep.mkv", "Show", false},
+		{"substring within component rejected", "My Show Extra/ep.mkv", "Show", false},
+		{"empty component", "Show/ep.mkv", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasPathComponent(tt.p, tt.comp); got != tt.want {
+				t.Errorf("hasPathComponent(%q, %q) = %v; want %v", tt.p, tt.comp, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFailSonarrQueueItemByPath_NoSiblingPrefixMatch guards the destructive
+// queue-fail path: a queue item whose OutputPath is a sibling-prefix of the
+// target ("/downloads/Show" vs "/downloads/Showtime/...") must NOT be matched,
+// so DeleteQueueContext (blocklist + remove) never fires on the wrong download.
+func TestFailSonarrQueueItemByPath_NoSiblingPrefixMatch(t *testing.T) {
+	var deleteCalled bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/queue"):
+			_, _ = w.Write([]byte(`{"totalRecords":1,"records":[{"id":7,"outputPath":"/downloads/Show"}]}`))
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/queue/"):
+			deleteCalled = true
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer srv.Close()
+
+	mgr := newResolverManager(nil)
+	err := mgr.failSonarrQueueItemByPath(context.Background(), newSonarrClient(srv), "/downloads/Showtime/S01E01.mkv")
+	if err == nil {
+		t.Fatal("expected a no-match error for a sibling-prefix queue item, got nil")
+	}
+	if deleteCalled {
+		t.Fatal("DeleteQueueContext fired on a sibling-prefix queue item (wrong download removed/blocklisted)")
+	}
+}
+
+// TestFailSonarrQueueItemByPath_AncestorDirMatch confirms the legitimate case
+// still works: a queue item whose OutputPath is a true ancestor directory of the
+// target is matched and failed.
+func TestFailSonarrQueueItemByPath_AncestorDirMatch(t *testing.T) {
+	var deletedQueuePath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/queue"):
+			_, _ = w.Write([]byte(`{"totalRecords":1,"records":[{"id":7,"outputPath":"/downloads/Show"}]}`))
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/queue/"):
+			deletedQueuePath = r.URL.Path
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer srv.Close()
+
+	mgr := newResolverManager(nil)
+	err := mgr.failSonarrQueueItemByPath(context.Background(), newSonarrClient(srv), "/downloads/Show/S01E01.mkv")
+	if err != nil {
+		t.Fatalf("unexpected error for ancestor-dir match: %v", err)
+	}
+	if !strings.HasSuffix(deletedQueuePath, "/queue/7") {
+		t.Fatalf("expected DeleteQueueContext on queue id 7, got delete path %q", deletedQueuePath)
 	}
 }

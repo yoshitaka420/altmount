@@ -725,7 +725,7 @@ func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.
 			episodeFiles, err := m.data.GetEpisodeFiles(ctx, client, instanceName, targetSeriesID)
 			if err == nil {
 				for _, ef := range episodeFiles {
-					if ef.Path == filePath || (metadata != nil && ef.SceneName == metadata.EpisodeFile.SceneName) {
+					if ef.Path == filePath || (metadata != nil && metadata.EpisodeFile != nil && ef.SceneName == metadata.EpisodeFile.SceneName) {
 						slog.InfoContext(ctx, "Smart Repair Guard: Episode already has a different healthy file (likely upgraded). Skipping repair.",
 							"old_file_id", targetEpisodeFileID,
 							"new_file_id", ef.ID)
@@ -856,10 +856,13 @@ func (m *Manager) failRadarrQueueItemByPath(ctx context.Context, client *radarr.
 	}
 
 	for _, q := range queue.Records {
-		// Try exact match, prefix match (if queue item is parent dir), or filename match
+		// Exact match, or the queue item's output path is an ancestor directory of
+		// the target. pathContainsDir anchors to a path-component boundary so a
+		// sibling like "/downloads/Show" can't match "/downloads/Showtime/...". The
+		// old bare strings.HasPrefix + basename arms were dropped because both could
+		// fail (blocklist + remove) the wrong, unrelated download.
 		if q.OutputPath == path ||
-			(q.OutputPath != "" && strings.HasPrefix(filepath.ToSlash(path), filepath.ToSlash(q.OutputPath))) ||
-			(q.OutputPath != "" && filepath.Base(q.OutputPath) == filepath.Base(path)) {
+			(q.OutputPath != "" && pathContainsDir(path, q.OutputPath)) {
 			slog.InfoContext(ctx, "Found matching item in Radarr download queue, marking as failed",
 				"queue_id", q.ID, "path", path, "output_path", q.OutputPath)
 
@@ -884,10 +887,13 @@ func (m *Manager) failSonarrQueueItemByPath(ctx context.Context, client *sonarr.
 	}
 
 	for _, q := range queue.Records {
-		// Try exact match, prefix match (if queue item is parent dir), or filename match
+		// Exact match, or the queue item's output path is an ancestor directory of
+		// the target. pathContainsDir anchors to a path-component boundary so a
+		// sibling like "/downloads/Show" can't match "/downloads/Showtime/...". The
+		// old bare strings.HasPrefix + basename arms were dropped because both could
+		// fail (blocklist + remove) the wrong, unrelated download.
 		if q.OutputPath == path ||
-			(q.OutputPath != "" && strings.HasPrefix(filepath.ToSlash(path), filepath.ToSlash(q.OutputPath))) ||
-			(q.OutputPath != "" && filepath.Base(q.OutputPath) == filepath.Base(path)) {
+			(q.OutputPath != "" && pathContainsDir(path, q.OutputPath)) {
 			slog.InfoContext(ctx, "Found matching item in Sonarr download queue, marking as failed",
 				"queue_id", q.ID, "path", path, "output_path", q.OutputPath)
 
