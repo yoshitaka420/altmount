@@ -29,6 +29,12 @@ type radarrOwnership struct {
 	// determination. The repair path ignores it (it falls back to other
 	// strategies), but fail-closed callers use it to avoid treating an
 	// errored lookup as "unowned".
+	//
+	// It is an audit flag for "a targeted lookup failed", not "overall lookup
+	// failed": it can stay true even after a later targeted/fallback lookup
+	// successfully resolves the movie. That is intentional — when own.movie is
+	// non-nil, callers use the movie and lookupErr is irrelevant; it only
+	// matters when no movie was resolved.
 	lookupErr bool
 }
 

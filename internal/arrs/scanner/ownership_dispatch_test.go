@@ -524,3 +524,24 @@ func TestResolveOwnership_ReadarrOwnedFileStillReferenced(t *testing.T) {
 		t.Fatalf("status = %v; want owned (book file still referenced)", got.Status)
 	}
 }
+
+func TestResolveOwnership_ReadarrErrorFailsClosed(t *testing.T) {
+	// The raw author list errors out -> Unknown (fail closed). Mirrors the Lidarr
+	// error test; Readarr is the one using the non-typed GetInto path.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/author") {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		t.Errorf("unexpected request: %s", r.URL.String())
+	}))
+	defer srv.Close()
+
+	mgr := dispatchManager(srv, "readarr", "readarr1")
+	meta := &model.WebhookMetadata{InstanceName: "readarr1"}
+
+	got := mgr.ResolveOwnership(context.Background(), "/books/x/y.epub", "", meta)
+	if got.Status != model.OwnershipUnknown {
+		t.Fatalf("status = %v; want unknown (fail closed)", got.Status)
+	}
+}

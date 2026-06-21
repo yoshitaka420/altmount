@@ -111,11 +111,11 @@ func (m *Manager) ResolveOwnership(ctx context.Context, filePath, relativePath s
 
 // sonarrCompatibleClient returns a *sonarr.Sonarr for a Sonarr or Whisparr
 // instance (Whisparr uses the Sonarr API).
-func (m *Manager) sonarrCompatibleClient(instanceType, instanceName, url, apiKey string) (*sonarr.Sonarr, error) {
+func (m *Manager) sonarrCompatibleClient(instanceType, instanceName, instanceURL, apiKey string) (*sonarr.Sonarr, error) {
 	if instanceType == "whisparr" {
-		return m.clients.GetOrCreateWhisparrClient(instanceName, url, apiKey)
+		return m.clients.GetOrCreateWhisparrClient(instanceName, instanceURL, apiKey)
 	}
-	return m.clients.GetOrCreateSonarrClient(instanceName, url, apiKey)
+	return m.clients.GetOrCreateSonarrClient(instanceName, instanceURL, apiKey)
 }
 
 // resolveSonarrOwnershipStatus turns a Sonarr ownership resolution into a
