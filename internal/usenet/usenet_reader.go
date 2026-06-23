@@ -42,6 +42,13 @@ type DataCorruptionError struct {
 	UnderlyingErr error
 	BytesRead     int64
 	NoRetry       bool
+	// Missing is true when the corruption is a missing article (NNTP 430 /
+	// ErrArticleNotFound) — the article is simply absent. It is false for
+	// content corruption (e.g. yEnc "data corruption detected"), where the
+	// article exists but its decoded bytes are bad. Callers use this to route
+	// missing-article failures through the tolerance-aware health re-check while
+	// condemning genuine content corruption directly.
+	Missing bool
 }
 
 func (e *DataCorruptionError) Error() string {
@@ -233,11 +240,13 @@ func (b *UsenetReader) Read(p []byte) (int, error) {
 				return 0, &DataCorruptionError{
 					UnderlyingErr: err,
 					BytesRead:     totalRead,
+					Missing:       true,
 				}
 			} else {
 				return 0, &DataCorruptionError{
 					UnderlyingErr: err,
 					BytesRead:     0,
+					Missing:       true,
 				}
 			}
 		}
@@ -281,6 +290,7 @@ func (b *UsenetReader) Read(p []byte) (int, error) {
 							return n, &DataCorruptionError{
 								UnderlyingErr: err,
 								BytesRead:     totalRead,
+								Missing:       true,
 							}
 						}
 					}
@@ -291,6 +301,7 @@ func (b *UsenetReader) Read(p []byte) (int, error) {
 					return n, &DataCorruptionError{
 						UnderlyingErr: err,
 						BytesRead:     totalRead,
+						Missing:       true,
 					}
 				}
 				return n, err

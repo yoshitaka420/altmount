@@ -2065,63 +2065,92 @@ func (mvf *MetadataVirtualFile) updateFileHealthOnError(dataCorruptionErr *usene
 	ctx, cancel := context.WithTimeout(mvf.ctx, 5*time.Second)
 	defer cancel()
 
-	// Any file with missing segments or corruption is marked as corrupted in metadata
-	// and DB to trigger the repair cycle via the health worker.
-	metadataStatus := metapb.FileStatus_FILE_STATUS_CORRUPTED
-
-	// Update metadata status (blocking with timeout)
-	if err := mvf.metadataService.UpdateFileStatus(mvf.name, metadataStatus); err != nil {
-		slog.WarnContext(ctx, "Failed to update metadata status", "file", mvf.name, "error", err)
-	}
-
-	// Update database health tracking (blocking with timeout)
+	// Shared error context for whichever path we take below.
 	errorMsg := dataCorruptionErr.Error()
 	sourceNzbPath := &mvf.meta.SourceNzbPath
 	if *sourceNzbPath == "" {
 		sourceNzbPath = nil
 	}
-
-	// Create error details JSON
 	errorDetails := fmt.Sprintf(`{"missing_articles": %d, "total_articles": %d, "error_type": "ArticleNotFound"}`,
 		1, len(mvf.meta.SegmentData))
 
-	// Mark as repair_triggered with high priority to trigger the replacement immediately.
-	// We skip the re-verification phase because a streaming failure is a definitive indicator of corruption.
-	slog.InfoContext(ctx, "Streaming failure detected, triggering immediate ARR repair", "file", mvf.name)
-	dbStatus := database.HealthStatusRepairTriggered
-
-	// If the file has already been imported (has a library path), move metadata to the safety folder
-	// so that the ARR rescan definitively sees the file as missing and triggers a redownload.
-	if health, err := mvf.healthRepository.GetFileHealth(ctx, mvf.name); err == nil && health != nil {
-		if health.LibraryPath != nil && *health.LibraryPath != "" {
-			cfg := mvf.configGetter()
-			relativePath := strings.TrimPrefix(mvf.name, cfg.MountPath)
-			relativePath = strings.TrimPrefix(relativePath, "/")
-			slog.InfoContext(ctx, "Moving metadata file for corrupted item to safety folder to trigger replacement", "file_path", mvf.name)
-			if moveErr := mvf.metadataService.MoveToCorrupted(ctx, relativePath); moveErr == nil {
-				// Successfully moved metadata, enqueue a coalesced rclone VFS
-				// refresh. Multiple files in the same directory collapse into a
-				// single RC call; concurrent failures across directories are
-				// batched into one call as well. EnqueueRefresh is a no-op on a
-				// nil coalescer (test harness).
-				mvf.repairCoalescer.EnqueueRefresh(filepath.Dir(mvf.name))
-			} else {
-				slog.WarnContext(ctx, "Failed to move corrupted metadata file, proceeding with repair trigger status", "error", moveErr)
+	if dataCorruptionErr.Missing {
+		// Missing article (NNTP 430). A single streaming miss can be transient or
+		// seek-only, so we do NOT condemn here: we neither mark the metadata
+		// corrupted nor move the .meta to corrupted_metadata nor set
+		// repair_triggered. Instead we enqueue a priority health re-check (status
+		// 'pending', scheduled now) and let the tolerance-aware monitor decide
+		// using acceptable_missing_segments_percentage. If the monitor confirms the
+		// miss exceeds tolerance it condemns and fires the existing arr callout via
+		// the normal repair cycle. A record already in repair or finalized is left
+		// untouched so we don't yank an in-flight repair back into the check queue.
+		skip := false
+		if health, err := mvf.healthRepository.GetFileHealth(ctx, mvf.name); err == nil && health != nil {
+			if health.Status == database.HealthStatusRepairTriggered || health.Status == database.HealthStatusCorrupted {
+				skip = true
+				slog.InfoContext(ctx, "Streaming missing-article failure; record already in repair/terminal, leaving as-is",
+					"file", mvf.name, "status", health.Status)
 			}
 		}
-	}
+		if !skip {
+			slog.InfoContext(ctx, "Streaming missing-article failure; enqueueing tolerance-aware recheck", "file", mvf.name)
+			if err := mvf.healthRepository.UpdateFileHealthScheduled(ctx,
+				mvf.name,
+				database.HealthStatusPending, // enters the check queue; repair_triggered would bypass it
+				&errorMsg,
+				sourceNzbPath,
+				&errorDetails,
+				true,             // high priority: picked up on the next cycle
+				time.Now().UTC(), // scheduled now
+			); err != nil {
+				slog.WarnContext(ctx, "Failed to enqueue recheck for streaming failure", "file", mvf.name, "error", err)
+			}
+		}
+	} else {
+		// Content corruption (e.g. yEnc "data corruption detected"): the article
+		// exists but its decoded bytes are bad, so an availability re-check would
+		// wrongly pass it. Condemn directly, exactly as before: mark the metadata
+		// corrupted, move the .meta to the safety folder (if imported) and set
+		// repair_triggered for immediate arr-driven replacement.
+		if err := mvf.metadataService.UpdateFileStatus(mvf.name, metapb.FileStatus_FILE_STATUS_CORRUPTED); err != nil {
+			slog.WarnContext(ctx, "Failed to update metadata status", "file", mvf.name, "error", err)
+		}
 
-	// Update database with high priority (scheduled for immediate pick-up by HealthWorker)
-	if err := mvf.healthRepository.UpdateFileHealthScheduled(ctx,
-		mvf.name,
-		dbStatus,
-		&errorMsg,
-		sourceNzbPath,
-		&errorDetails,
-		true, // noRetry=true forces it to be picked up for repair immediately
-		time.Now().UTC(),
-	); err != nil {
-		slog.WarnContext(ctx, "Failed to update health database for streaming failure", "file", mvf.name, "error", err)
+		slog.InfoContext(ctx, "Streaming content-corruption detected, triggering immediate ARR repair", "file", mvf.name)
+
+		// If the file has already been imported (has a library path), move metadata to the safety folder
+		// so that the ARR rescan definitively sees the file as missing and triggers a redownload.
+		if health, err := mvf.healthRepository.GetFileHealth(ctx, mvf.name); err == nil && health != nil {
+			if health.LibraryPath != nil && *health.LibraryPath != "" {
+				cfg := mvf.configGetter()
+				relativePath := strings.TrimPrefix(mvf.name, cfg.MountPath)
+				relativePath = strings.TrimPrefix(relativePath, "/")
+				slog.InfoContext(ctx, "Moving metadata file for corrupted item to safety folder to trigger replacement", "file_path", mvf.name)
+				if moveErr := mvf.metadataService.MoveToCorrupted(ctx, relativePath); moveErr == nil {
+					// Successfully moved metadata, enqueue a coalesced rclone VFS
+					// refresh. Multiple files in the same directory collapse into a
+					// single RC call; concurrent failures across directories are
+					// batched into one call as well. EnqueueRefresh is a no-op on a
+					// nil coalescer (test harness).
+					mvf.repairCoalescer.EnqueueRefresh(filepath.Dir(mvf.name))
+				} else {
+					slog.WarnContext(ctx, "Failed to move corrupted metadata file, proceeding with repair trigger status", "error", moveErr)
+				}
+			}
+		}
+
+		// Update database with high priority (scheduled for immediate pick-up by HealthWorker)
+		if err := mvf.healthRepository.UpdateFileHealthScheduled(ctx,
+			mvf.name,
+			database.HealthStatusRepairTriggered,
+			&errorMsg,
+			sourceNzbPath,
+			&errorDetails,
+			true, // noRetry=true forces it to be picked up for repair immediately
+			time.Now().UTC(),
+		); err != nil {
+			slog.WarnContext(ctx, "Failed to update health database for streaming failure", "file", mvf.name, "error", err)
+		}
 	}
 
 	// Increment failure count for tracking/masking if enabled
