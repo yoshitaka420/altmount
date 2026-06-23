@@ -37,6 +37,41 @@ func toleranceConfig(acceptablePct float64) config.ConfigGetter {
 	return func() *config.Config { return c }
 }
 
+// TestCheckSingleFile_ConfigDrivenSampledTolerance proves a configured value
+// changes condemnation through the real SAMPLED path (segment_sample_percentage),
+// not just force-full: with 1000 segments at 5% sampling the validator checks 50
+// segments; one missing (segment 0, always in the strategic first-3 sample) is
+// 2% of the sample. acceptable=3 keeps it; acceptable=0 condemns it.
+func TestCheckSingleFile_ConfigDrivenSampledTolerance(t *testing.T) {
+	const segCount, segSize = 1000, 100
+
+	run := func(t *testing.T, acceptablePct float64) EventType {
+		segs := contiguousSegments(segCount, segSize)
+		fp := fakepool.New()
+		fp.SetBehavior(segments.MessageID(0), fakepool.SegmentBehavior{Err: nntppool.ErrArticleNotFound})
+		mgr := &checkerTestPoolManager{client: fp}
+
+		c := &config.Config{}
+		c.Health.AcceptableMissingSegmentsPercentage = acceptablePct
+		c.Health.SegmentSamplePercentage = 5 // sampled, not full
+		hc := NewHealthChecker(nil, nil, mgr, func() *config.Config { return c }, nil)
+
+		input := healthCheckInput{fileSize: int64(segCount * segSize), segments: segs}
+		return hc.checkSingleFile(context.Background(), "tv/show.mkv", input).Type // no ForceFullCheck → samples
+	}
+
+	t.Run("config=3 → 1 missing sampled segment kept", func(t *testing.T) {
+		if got := run(t, 3); got != EventTypeFileHealthy {
+			t.Fatalf("event = %q; want %q (config tolerance 3 must keep a single sampled miss)", got, EventTypeFileHealthy)
+		}
+	})
+	t.Run("config=0 → 1 missing condemned", func(t *testing.T) {
+		if got := run(t, 0); got != EventTypeFileCorrupted {
+			t.Fatalf("event = %q; want %q (default 0 must condemn on any missing)", got, EventTypeFileCorrupted)
+		}
+	})
+}
+
 func TestCheckSingleFile_AcceptableMissingTolerance(t *testing.T) {
 	const (
 		segCount = 100
