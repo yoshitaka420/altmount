@@ -57,7 +57,24 @@ func (a *metaStore) Exists(ctx context.Context, item *database.FileHealth) (bool
 		// ownership gate decide.
 		return true, nil
 	}
-	return meta != nil, nil
+	if meta != nil {
+		return true, nil
+	}
+
+	// The original .meta is gone. Distinguish "an arr removed the file" from
+	// "AltMount moved the .meta to corrupted_metadata when it condemned the file":
+	// if a corrupted_metadata copy exists, the file is dead-and-hidden (not
+	// removed), so report it as existing so Evaluate runs the ownership gate
+	// (fail-closed KEEP when the arr is unreachable or the lookup errors) instead
+	// of treating it as a file_removed zombie and deleting unconditionally.
+	// rel mirrors metaStore.Delete and the MoveToCorrupted callers (MountPath stripped).
+	cfg := a.cfg()
+	rel := strings.TrimPrefix(item.FilePath, cfg.MountPath)
+	rel = strings.TrimPrefix(rel, "/")
+	if a.ms.CorruptedMetadataExists(rel) {
+		return true, nil
+	}
+	return false, nil
 }
 
 func (a *metaStore) Delete(ctx context.Context, item *database.FileHealth) error {

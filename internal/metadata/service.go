@@ -756,6 +756,23 @@ func (ms *MetadataService) MoveToCorrupted(ctx context.Context, virtualPath stri
 	return nil
 }
 
+// CorruptedMetadataExists reports whether a .meta for virtualPath currently
+// exists in the corrupted_metadata safety folder — i.e. AltMount moved it there
+// when it condemned the file (see MoveToCorrupted). It mirrors MoveToCorrupted's
+// path construction exactly (same dir layout, truncateFilename, corrupted_metadata
+// root) so it matches the moved file. Corrupted-file triage uses this to tell
+// "an arr removed the file" apart from "AltMount hid the .meta pending repair".
+func (ms *MetadataService) CorruptedMetadataExists(virtualPath string) bool {
+	cleanPath := filepath.FromSlash(strings.TrimPrefix(virtualPath, "/"))
+	dir := filepath.Dir(cleanPath)
+	truncatedFilename := ms.truncateFilename(filepath.Base(cleanPath))
+	corruptedPath := filepath.Join(ms.rootPath, "corrupted_metadata", dir, truncatedFilename+".meta")
+	if _, err := os.Stat(corruptedPath); err != nil {
+		return false
+	}
+	return true
+}
+
 // CleanupOrphanedIDSymlinks walks the .ids/ directory and removes symlinks whose
 // targets no longer exist. Empty shard directories are cleaned up afterwards.
 // Returns the number of removed symlinks.
