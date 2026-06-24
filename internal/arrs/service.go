@@ -2,6 +2,7 @@ package arrs
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -28,6 +29,7 @@ var (
 	ErrPathMatchFailed         = model.ErrPathMatchFailed
 	ErrEpisodeAlreadySatisfied = model.ErrEpisodeAlreadySatisfied
 	ErrInstanceNotFound        = model.ErrInstanceNotFound
+	ErrArrUnreachable          = model.ErrArrUnreachable
 )
 
 // Service manages Radarr, Sonarr, Lidarr, Readarr, and Whisparr instances for health monitoring and file repair
@@ -238,9 +240,18 @@ func (s *Service) RegisterConfigChangeHandler(ctx context.Context, configManager
 	})
 }
 
-// TriggerFileRescan triggers a rescan for a specific file path through the appropriate ARR instance
+// TriggerFileRescan triggers a rescan for a specific file path through the appropriate ARR instance.
+//
+// Transport-level failures (the arr is unreachable: DNS/timeout/connection
+// refused) are tagged with ErrArrUnreachable so the health worker defers repair
+// instead of condemning the file — it self-heals once the arr is reachable again.
+// Logical failures (path match, already-satisfied, etc.) pass through unchanged.
 func (s *Service) TriggerFileRescan(ctx context.Context, pathForRescan string, relativePath string, metadataStr *string) error {
-	return s.scanner.TriggerFileRescan(ctx, pathForRescan, relativePath, metadataStr)
+	err := s.scanner.TriggerFileRescan(ctx, pathForRescan, relativePath, metadataStr)
+	if err != nil && IsUnreachableError(err) {
+		return fmt.Errorf("%w: %v", ErrArrUnreachable, err)
+	}
+	return err
 }
 
 // DiscoverFileMetadata attempts to discover the rich metadata for a file through the appropriate ARR instance

@@ -10,6 +10,12 @@ var (
 	ErrPathMatchFailed         = fmt.Errorf("path match failed")
 	ErrEpisodeAlreadySatisfied = fmt.Errorf("episode already satisfied by another file")
 	ErrInstanceNotFound        = fmt.Errorf("instance not found")
+	// ErrArrUnreachable tags a repair/rescan failure that was caused by the arr
+	// being unreachable at the transport level (DNS failure, connection refused,
+	// timeout, no route to host) rather than by a logical "this file is bad"
+	// response. Callers use it to DEFER condemnation: a transient outage must not
+	// flip a file to terminal corrupted.
+	ErrArrUnreachable = fmt.Errorf("arr unreachable")
 )
 
 // ConfigInstance represents an arrs instance from configuration

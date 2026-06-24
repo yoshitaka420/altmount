@@ -1015,10 +1015,11 @@ func (hw *HealthWorker) getMaxConcurrentJobs() int {
 type repairOutcome int
 
 const (
-	repairOutcomeTriggered   repairOutcome = iota // ARR accepted the repair; metadata moved to corrupted folder
-	repairOutcomeCorrupted                        // ARR failed with a generic error; mark file corrupted
-	repairOutcomeDeleted                          // Health record and/or metadata were deleted (zombie)
-	repairOutcomeRegenerated                      // Metadata was successfully regenerated from NZB
+	repairOutcomeTriggered      repairOutcome = iota // ARR accepted the repair; metadata moved to corrupted folder
+	repairOutcomeCorrupted                           // ARR failed with a generic error; mark file corrupted
+	repairOutcomeDeleted                             // Health record and/or metadata were deleted (zombie)
+	repairOutcomeRegenerated                         // Metadata was successfully regenerated from NZB
+	repairOutcomeArrUnreachable                      // ARR unreachable (transport); DEFER — keep repair_triggered, do not condemn
 )
 
 // applyRepairOutcome maps a repairOutcome to the corresponding fields on the HealthStatusUpdate.
@@ -1037,6 +1038,19 @@ func applyRepairOutcome(update *database.HealthStatusUpdate, outcome repairOutco
 		update.Status = database.HealthStatusCorrupted
 		if err != nil {
 			errMsg := err.Error()
+			update.ErrorMessage = &errMsg
+		}
+	case repairOutcomeArrUnreachable:
+		// The arr needed to verify/repair this file is unreachable (transport
+		// outage). DEFER instead of condemning: keep the file repair_triggered and
+		// reschedule (the caller already set ScheduledCheckAt with back-off) so the
+		// repair_triggered retry engine self-heals it once the arr returns.
+		// UpdateTypeRepairTrigger does NOT increment repair_retry_count, so a
+		// prolonged outage cannot exhaust the repair budget and condemn the file.
+		update.Type = database.UpdateTypeRepairTrigger
+		update.Status = database.HealthStatusRepairTriggered
+		if err != nil {
+			errMsg := fmt.Sprintf("arr unreachable, repair deferred (auto-retries when reachable): %v", err)
 			update.ErrorMessage = &errMsg
 		}
 	}
@@ -1141,6 +1155,16 @@ func (hw *HealthWorker) triggerFileRepair(ctx context.Context, item *database.Fi
 			return repairOutcomeDeleted, nil
 		}
 
+		// ErrArrUnreachable means the ARR is down at the transport level (DNS/timeout/
+		// connection refused) — a transient outage, not a verdict on the file. DEFER:
+		// keep it repair_triggered so the retry engine self-heals it when the ARR
+		// returns. Condemning here would strand healthy-but-unverified files as corrupted.
+		if errors.Is(err, arrs.ErrArrUnreachable) {
+			slog.WarnContext(ctx, "ARR unreachable during repair; deferring (file stays repair_triggered, self-heals when ARR returns)",
+				"file_path", filePath, "arr_error", err)
+			return repairOutcomeArrUnreachable, err
+		}
+
 		// ErrPathMatchFailed only means AltMount could not match its rescan path against the
 		// ARR library/queue. The ARR routinely renames and reorganizes imported files (symlink
 		// libraries, custom naming), so a path miss is NOT a reliable orphan signal: treating
@@ -1203,6 +1227,13 @@ func (hw *HealthWorker) retriggerFileRepair(ctx context.Context, item *database.
 				"file_path", filePath, "arr_error", err)
 			hw.cleanupZombieRecord(ctx, item)
 			return repairOutcomeDeleted, nil
+		}
+
+		// Transport outage — defer instead of condemning (see triggerFileRepair).
+		if errors.Is(err, arrs.ErrArrUnreachable) {
+			slog.WarnContext(ctx, "ARR unreachable on re-trigger; deferring (file stays repair_triggered, self-heals when ARR returns)",
+				"file_path", filePath, "arr_error", err)
+			return repairOutcomeArrUnreachable, err
 		}
 
 		if errors.Is(err, arrs.ErrPathMatchFailed) {
