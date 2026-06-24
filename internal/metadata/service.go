@@ -773,6 +773,29 @@ func (ms *MetadataService) CorruptedMetadataExists(virtualPath string) bool {
 	return true
 }
 
+// DeleteCorruptedMetadata removes the corrupted_metadata safety copy of a .meta
+// (and its .id sidecar, if present) for virtualPath. It mirrors MoveToCorrupted /
+// CorruptedMetadataExists path construction exactly. A missing copy is not an
+// error, so the call is idempotent. Corrupted-file triage uses this so that
+// deleting a condemned record also removes the hidden safety copy instead of
+// orphaning it on disk under corrupted_metadata/.
+func (ms *MetadataService) DeleteCorruptedMetadata(virtualPath string) error {
+	cleanPath := filepath.FromSlash(strings.TrimPrefix(virtualPath, "/"))
+	dir := filepath.Dir(cleanPath)
+	truncatedFilename := ms.truncateFilename(filepath.Base(cleanPath))
+	corruptedPath := filepath.Join(ms.rootPath, "corrupted_metadata", dir, truncatedFilename+".meta")
+
+	// Remove the .id sidecar first (MoveToCorrupted relocates it alongside the
+	// .meta); absence is fine.
+	if idErr := os.Remove(corruptedPath + ".id"); idErr != nil && !os.IsNotExist(idErr) {
+		return fmt.Errorf("failed to delete corrupted metadata .id sidecar: %w", idErr)
+	}
+	if err := os.Remove(corruptedPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to delete corrupted metadata copy: %w", err)
+	}
+	return nil
+}
+
 // CleanupOrphanedIDSymlinks walks the .ids/ directory and removes symlinks whose
 // targets no longer exist. Empty shard directories are cleaned up afterwards.
 // Returns the number of removed symlinks.

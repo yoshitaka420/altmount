@@ -82,7 +82,13 @@ func (a *metaStore) Delete(ctx context.Context, item *database.FileHealth) error
 	rel := strings.TrimPrefix(item.FilePath, cfg.MountPath)
 	rel = strings.TrimPrefix(rel, "/")
 	// deleteSourceNzb is always false: triage removes the .meta only.
-	return a.ms.DeleteFileMetadataWithSourceNzb(ctx, rel, false)
+	// Remove the original .meta (a no-op if AltMount already moved it to
+	// corrupted_metadata when it condemned the file) AND the corrupted_metadata
+	// safety copy, so deleting a condemned record leaves nothing orphaned on disk.
+	if err := a.ms.DeleteFileMetadataWithSourceNzb(ctx, rel, false); err != nil {
+		return err
+	}
+	return a.ms.DeleteCorruptedMetadata(rel)
 }
 
 // ownershipResolver adapts an ArrsOwnership service to OwnershipResolver.
