@@ -71,8 +71,22 @@ export function MetadataConfigSection({
 		handleBackupChange("schedule", buildCronString(updated));
 	};
 
+	// A custom cron that cronstrue can't parse must block the save, not just show
+	// an inline error, so an invalid backup.schedule can never be persisted.
+	const isCustomCronInvalid = (() => {
+		if (scheduleState.type !== "custom") return false;
+		try {
+			cronstrue.toString(buildCronString(scheduleState), {
+				throwExceptionOnParseError: true,
+			});
+			return false;
+		} catch {
+			return true;
+		}
+	})();
+
 	const handleSave = async () => {
-		if (onUpdate && hasChanges) {
+		if (onUpdate && hasChanges && !isCustomCronInvalid) {
 			await onUpdate("metadata", formData);
 			setHasChanges(false);
 		}
@@ -247,17 +261,9 @@ export function MetadataConfigSection({
 									)}
 								</div>
 
-								{scheduleState.type === "custom" &&
-									(() => {
-										try {
-											cronstrue.toString(buildCronString(scheduleState), {
-												throwExceptionOnParseError: true,
-											});
-											return null;
-										} catch {
-											return <p className="text-[10px] text-error">Invalid cron expression</p>;
-										}
-									})()}
+								{isCustomCronInvalid && (
+									<p className="text-[10px] text-error">Invalid cron expression</p>
+								)}
 
 								<fieldset className="fieldset">
 									<legend className="fieldset-legend font-semibold">Keep Last N Backups</legend>
@@ -356,7 +362,9 @@ export function MetadataConfigSection({
 						type="button"
 						className={`btn btn-primary px-10 shadow-lg shadow-primary/20 ${!hasChanges && "btn-ghost border-base-300"}`}
 						onClick={handleSave}
-						disabled={!hasChanges || isUpdating || !formData.root_path.trim()}
+						disabled={
+							!hasChanges || isUpdating || !formData.root_path.trim() || isCustomCronInvalid
+						}
 					>
 						{isUpdating ? <LoadingSpinner size="sm" /> : <Save className="h-4 w-4" />}
 						{isUpdating ? "Saving..." : "Save Changes"}

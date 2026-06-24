@@ -436,8 +436,9 @@ export function ImportConfigSection({
 												type="button"
 												className="opacity-70 hover:opacity-100"
 												onClick={() => removeExtension(ext)}
+												aria-label={`Remove ${ext}`}
 											>
-												<X className="h-3 w-3" />
+												<X className="h-3 w-3" aria-hidden="true" />
 											</button>
 										)}
 									</div>

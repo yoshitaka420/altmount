@@ -112,7 +112,17 @@ export function formatExpirationDate(date?: string): string {
 	if (!date) return "";
 	const [year, month, day] = date.split("-").map(Number);
 	if (!year || !month || !day) return date;
-	return new Date(year, month - 1, day).toLocaleDateString(undefined, {
+	// new Date(y, m-1, d) silently rolls impossible dates (e.g. Feb 30 -> Mar 2),
+	// so reject anything the constructed Date doesn't round-trip back to.
+	const parsed = new Date(year, month - 1, day);
+	if (
+		parsed.getFullYear() !== year ||
+		parsed.getMonth() !== month - 1 ||
+		parsed.getDate() !== day
+	) {
+		return date;
+	}
+	return parsed.toLocaleDateString(undefined, {
 		year: "numeric",
 		month: "short",
 		day: "numeric",

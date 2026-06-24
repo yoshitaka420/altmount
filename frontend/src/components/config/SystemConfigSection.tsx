@@ -77,20 +77,16 @@ function applyTheme(theme: ThemeId | "system") {
 	}
 }
 
-function ThemeSwatch({
-	theme,
-	label,
-	isActive,
-	onClick,
-	minimal = false,
-}: {
+interface ThemeSwatchProps {
 	theme: ThemeId;
 	label?: string;
 	isActive: boolean;
 	onClick: () => void;
 	// Minimal themes share one blue; show success/warning to preview green/amber.
 	minimal?: boolean;
-}) {
+}
+
+function ThemeSwatch({ theme, label, isActive, onClick, minimal = false }: ThemeSwatchProps) {
 	return (
 		<button
 			type="button"

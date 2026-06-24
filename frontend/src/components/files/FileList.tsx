@@ -79,10 +79,14 @@ export function FileList({
 		overscan: 5,
 	});
 
-	// Row heights change when the column count changes, so force a re-measure.
+	// Row heights change when the column count changes, so force a re-measure
+	// whenever itemsPerRow shifts (e.g. on resize) to keep virtual offsets in sync.
+	// itemsPerRow is read here so it stays a real effect dependency.
 	useEffect(() => {
-		rowVirtualizer.measure();
-	}, [rowVirtualizer]);
+		if (itemsPerRow > 0) {
+			rowVirtualizer.measure();
+		}
+	}, [rowVirtualizer, itemsPerRow]);
 
 	const getFileIcon = (file: WebDAVFile) => {
 		if (file.type === "directory") {

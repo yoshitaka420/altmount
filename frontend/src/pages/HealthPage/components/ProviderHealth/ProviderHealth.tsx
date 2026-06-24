@@ -598,7 +598,7 @@ export function ProviderHealth() {
 											{provider.last_speed_test_mbps > 0 ? (
 												<div className="flex min-w-[70px] flex-col">
 													<span className="font-bold font-mono text-success text-xs">
-														{provider.last_speed_test_mbps.toFixed(2)} MB/s
+														{provider.last_speed_test_mbps.toFixed(2)} Mbps
 													</span>
 													{provider.last_speed_test_time && (
 														<span className="font-mono text-[9px] text-base-content/40">

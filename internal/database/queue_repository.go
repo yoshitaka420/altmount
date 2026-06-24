@@ -554,9 +554,12 @@ func (r *QueueRepository) UpdateQueueItemNzbPath(ctx context.Context, id int64, 
 	return nil
 }
 
-// UpdateQueueItemCategory updates the category and priority of a queue item.
+// UpdateQueueItemCategory updates the priority of a queue item and, when a
+// category is provided, its category. A nil category leaves the stored value
+// untouched (via COALESCE) so a dedupe re-upload that omits the category can't
+// clobber an existing one.
 func (r *QueueRepository) UpdateQueueItemCategory(ctx context.Context, id int64, category *string, priority QueuePriority) error {
-	query := `UPDATE import_queue SET category = ?, priority = ?, updated_at = datetime('now') WHERE id = ?`
+	query := `UPDATE import_queue SET category = COALESCE(?, category), priority = ?, updated_at = datetime('now') WHERE id = ?`
 	if _, err := r.db.ExecContext(ctx, query, category, priority, id); err != nil {
 		return fmt.Errorf("failed to update queue item category: %w", err)
 	}

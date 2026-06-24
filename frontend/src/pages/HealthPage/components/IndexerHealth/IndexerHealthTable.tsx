@@ -83,12 +83,17 @@ export function IndexerHealthTable({
 								{columns.map((col) => (
 									<th
 										key={col.field}
-										className="cursor-pointer transition-colors hover:bg-base-200"
-										onClick={() => onSort(col.field)}
+										aria-sort={
+											sortKey === col.field ? (sortAsc ? "ascending" : "descending") : "none"
+										}
 									>
-										<div className="flex items-center gap-1">
+										<button
+											type="button"
+											className="flex w-full cursor-pointer items-center gap-1 transition-colors hover:text-primary"
+											onClick={() => onSort(col.field)}
+										>
 											{col.label} <SortIcon field={col.field} sortKey={sortKey} sortAsc={sortAsc} />
-										</div>
+										</button>
 									</th>
 								))}
 								<th>Actions</th>

@@ -419,7 +419,85 @@ func (s *Server) handleBatchExportNZB(c *fiber.Ctx) error {
 	slog.InfoContext(ctx, "Collected metadata files",
 		"total_count", len(metadataFiles))
 
-	// Set ZIP headers before streaming begins.
+	// processMeta converts one .meta path into a ready-to-write NZB entry. ok=false
+	// means the file was skipped (skipped=true for archive/AES exclusions) or could
+	// not be read/generated.
+	processMeta := func(metaPath string) (nzbFilename string, nzbContent []byte, skipped bool, ok bool) {
+		relPath, err := filepath.Rel(metadataRootPath, metaPath)
+		if err != nil {
+			slog.WarnContext(ctx, "Failed to calculate relative path",
+				"error", err,
+				"meta_path", metaPath)
+			return "", nil, false, false
+		}
+
+		// Remove .meta extension to get virtual filename
+		virtualFilename := strings.TrimSuffix(relPath, ".meta")
+
+		// Archives and AES-encrypted files are always excluded
+		if shouldExcludeFile(virtualFilename, true) {
+			return "", nil, true, false
+		}
+
+		// Calculate full virtual path
+		virtualPath := filepath.Join(virtualRootPath, virtualFilename)
+		virtualPath = strings.ReplaceAll(virtualPath, string(filepath.Separator), "/")
+
+		// Read metadata
+		metadata, err := s.metadataReader.GetFileMetadata(virtualPath)
+		if err != nil {
+			slog.WarnContext(ctx, "Failed to read metadata",
+				"error", err,
+				"virtual_path", virtualPath)
+			return "", nil, false, false
+		}
+		if metadata == nil {
+			slog.WarnContext(ctx, "Metadata not found",
+				"virtual_path", virtualPath)
+			return "", nil, false, false
+		}
+
+		// Skip AES-encrypted files (encrypted archives)
+		if metadata.Encryption == metapb.Encryption_AES {
+			return "", nil, true, false
+		}
+
+		nzbContent, err = s.generateNZBFromMetadata(metadata, virtualPath)
+		if err != nil {
+			slog.WarnContext(ctx, "Failed to generate NZB",
+				"error", err,
+				"virtual_path", virtualPath)
+			return "", nil, false, false
+		}
+
+		nzbFilename = strings.TrimSuffix(virtualFilename, filepath.Ext(virtualFilename)) + ".nzb"
+		return nzbFilename, nzbContent, false, true
+	}
+
+	// Stage the first exportable NZB before sending any ZIP headers so a run that
+	// can't produce a single NZB returns a clean 404 instead of an empty 200 ZIP.
+	exportedCount := 0
+	skippedCount := 0
+	firstIdx := -1
+	var firstName string
+	var firstContent []byte
+	for i, metaPath := range metadataFiles {
+		name, content, skipped, ok := processMeta(metaPath)
+		if skipped {
+			skippedCount++
+		}
+		if ok {
+			firstIdx = i
+			firstName = name
+			firstContent = content
+			break
+		}
+	}
+	if firstIdx == -1 {
+		return RespondError(c, fiber.StatusNotFound, ErrCodeNotFound, "No exportable NZB files found", "")
+	}
+
+	// Set ZIP headers now that at least one NZB is guaranteed.
 	timestamp := time.Now().Unix()
 	zipFilename := fmt.Sprintf("nzb-export-%d.zip", timestamp)
 	c.Set("Content-Type", "application/zip")
@@ -428,85 +506,36 @@ func (s *Server) handleBatchExportNZB(c *fiber.Ctx) error {
 	// Stream the ZIP instead of buffering the whole archive in memory.
 	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
 		zipWriter := zip.NewWriter(w)
-		exportedCount := 0
-		skippedCount := 0
 
-		for _, metaPath := range metadataFiles {
-			// Calculate virtual path
-			relPath, err := filepath.Rel(metadataRootPath, metaPath)
-			if err != nil {
-				slog.WarnContext(ctx, "Failed to calculate relative path",
-					"error", err,
-					"meta_path", metaPath)
-				continue
-			}
-
-			// Remove .meta extension to get virtual filename
-			virtualFilename := strings.TrimSuffix(relPath, ".meta")
-
-			// Check if should exclude based on archive pattern
-			// Archives and AES-encrypted files are always excluded
-			if shouldExcludeFile(virtualFilename, true) {
-				skippedCount++
-				slog.DebugContext(ctx, "Skipping archive file",
-					"filename", virtualFilename)
-				continue
-			}
-
-			// Calculate full virtual path
-			virtualPath := filepath.Join(virtualRootPath, virtualFilename)
-			virtualPath = strings.ReplaceAll(virtualPath, string(filepath.Separator), "/")
-
-			// Read metadata
-			metadata, err := s.metadataReader.GetFileMetadata(virtualPath)
-			if err != nil {
-				slog.WarnContext(ctx, "Failed to read metadata",
-					"error", err,
-					"virtual_path", virtualPath)
-				continue
-			}
-
-			if metadata == nil {
-				slog.WarnContext(ctx, "Metadata not found",
-					"virtual_path", virtualPath)
-				continue
-			}
-
-			// Skip AES-encrypted files (encrypted archives)
-			if metadata.Encryption == metapb.Encryption_AES {
-				skippedCount++
-				continue
-			}
-
-			// Generate NZB
-			nzbContent, err := s.generateNZBFromMetadata(metadata, virtualPath)
-			if err != nil {
-				slog.WarnContext(ctx, "Failed to generate NZB",
-					"error", err,
-					"virtual_path", virtualPath)
-				continue
-			}
-
-			// Create NZB filename
-			nzbFilename := strings.TrimSuffix(virtualFilename, filepath.Ext(virtualFilename)) + ".nzb"
-
-			// Add to ZIP
-			writer, err := zipWriter.Create(nzbFilename)
+		writeEntry := func(name string, content []byte) {
+			writer, err := zipWriter.Create(name)
 			if err != nil {
 				slog.WarnContext(ctx, "Failed to create ZIP entry",
 					"error", err,
-					"filename", nzbFilename)
-				continue
+					"filename", name)
+				return
 			}
-
-			if _, err := io.Copy(writer, bytes.NewReader(nzbContent)); err != nil {
+			if _, err := io.Copy(writer, bytes.NewReader(content)); err != nil {
 				slog.WarnContext(ctx, "Failed to write NZB to ZIP",
 					"error", err,
-					"filename", nzbFilename)
+					"filename", name)
+				return
+			}
+			exportedCount++
+		}
+
+		// Write the already-staged first entry, then process the rest.
+		writeEntry(firstName, firstContent)
+		for _, metaPath := range metadataFiles[firstIdx+1:] {
+			name, content, skipped, ok := processMeta(metaPath)
+			if skipped {
+				skippedCount++
 				continue
 			}
-
-			exportedCount++
+			if !ok {
+				continue
+			}
+			writeEntry(name, content)
 		}
 
 		// Headers are already sent, so finalize errors can only be logged.

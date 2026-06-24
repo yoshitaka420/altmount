@@ -234,9 +234,18 @@ func findEntityByPath(entities []entityPath, filePath, relativePath string) (int
 // non-nil error means the lookup itself failed (fail closed).
 func (m *Manager) resolveLidarrArtist(ctx context.Context, client *lidarr.Lidarr, filePath, relativePath, instanceName string, metadata *model.WebhookMetadata) (artistID int64, found bool, err error) {
 	if metadata != nil && metadata.Artist != nil && metadata.Artist.Id > 0 {
-		if a, e := client.GetArtistByIDContext(ctx, metadata.Artist.Id); e == nil && a != nil && a.ID > 0 {
+		a, e := client.GetArtistByIDContext(ctx, metadata.Artist.Id)
+		if e != nil {
+			// A transient Lidarr failure on the exact-id lookup must not silently
+			// fall back to folder matching: that could resolve as unowned/replaced
+			// and trigger a false delete. Fail closed (Unknown) instead.
+			slog.WarnContext(ctx, "Ownership unknown: Lidarr artist id lookup failed", "instance", instanceName, "error", e)
+			return 0, false, e
+		}
+		if a != nil && a.ID > 0 {
 			return a.ID, true, nil
 		}
+		// Valid miss (no artist with that id): fall through to folder matching.
 	}
 	artists, e := client.GetArtistContext(ctx, "")
 	if e != nil {
@@ -306,9 +315,18 @@ func (m *Manager) resolveLidarrOwnershipStatus(ctx context.Context, client *lida
 // fallback issues the raw GET the typed helpers use under the hood.
 func (m *Manager) resolveReadarrAuthor(ctx context.Context, client *readarr.Readarr, filePath, relativePath, instanceName string, metadata *model.WebhookMetadata) (authorID int64, found bool, err error) {
 	if metadata != nil && metadata.Author != nil && metadata.Author.Id > 0 {
-		if a, e := client.GetAuthorByIDContext(ctx, metadata.Author.Id); e == nil && a != nil && a.ID > 0 {
+		a, e := client.GetAuthorByIDContext(ctx, metadata.Author.Id)
+		if e != nil {
+			// Fail open only on a successful exact match: an errored lookup must
+			// preserve Unknown rather than fall through to the folder scan, which
+			// could resolve as unowned/replaced and trigger a false delete.
+			slog.WarnContext(ctx, "Ownership unknown: Readarr author id lookup failed", "instance", instanceName, "error", e)
+			return 0, false, e
+		}
+		if a != nil && a.ID > 0 {
 			return a.ID, true, nil
 		}
+		// Valid miss (no author with that id): fall through to folder matching.
 	}
 	var authors []*readarr.Author
 	req := starr.Request{URI: "v1/author", Query: make(url.Values)}

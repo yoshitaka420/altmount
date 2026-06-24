@@ -101,46 +101,68 @@ func (m *Manager) resolveRadarrOwnership(ctx context.Context, client *radarr.Rad
 			return own, fmt.Errorf("failed to get movies from Radarr: %w", err)
 		}
 
+		requestFileName := filepath.Base(filePath)
+
+		// Strong matches first: exact path, .strm-stripped path, and relative-path
+		// suffix each uniquely tie a movie to this file.
 		for _, movie := range movies {
-			requestFileName := filepath.Base(filePath)
+			if !movie.HasFile || movie.MovieFile == nil {
+				continue
+			}
 
-			if movie.HasFile && movie.MovieFile != nil {
-				if movie.MovieFile.Path == filePath {
+			if movie.MovieFile.Path == filePath {
+				own.movie = movie
+				own.movieFileID = movie.MovieFile.ID
+				break
+			}
+
+			if before, ok := strings.CutSuffix(filePath, ".strm"); ok {
+				if strings.TrimSuffix(movie.MovieFile.Path, filepath.Ext(movie.MovieFile.Path)) == before {
 					own.movie = movie
 					own.movieFileID = movie.MovieFile.ID
 					break
 				}
-
-				movieFileName := filepath.Base(movie.MovieFile.Path)
-				if movieFileName == requestFileName {
-					slog.InfoContext(ctx, "Found Radarr movie match by filename",
-						"movie", movie.Title,
-						"path", movie.MovieFile.Path)
+			}
+			if relativePath != "" {
+				strippedRelative := strings.TrimSuffix(relativePath, ".strm")
+				if strings.HasSuffix(movie.MovieFile.Path, relativePath) ||
+					strings.HasSuffix(strings.TrimSuffix(movie.MovieFile.Path, filepath.Ext(movie.MovieFile.Path)), strippedRelative) {
+					slog.InfoContext(ctx, "Found Radarr movie match by relative path suffix",
+						"radarr_path", movie.MovieFile.Path,
+						"relative_path", relativePath)
 					own.movie = movie
 					own.movieFileID = movie.MovieFile.ID
 					break
 				}
+			}
+		}
 
-				if before, ok := strings.CutSuffix(filePath, ".strm"); ok {
-					strippedPath := before
-					if strings.TrimSuffix(movie.MovieFile.Path, filepath.Ext(movie.MovieFile.Path)) == strippedPath {
-						own.movie = movie
-						own.movieFileID = movie.MovieFile.ID
+		// Weak fallback: a bare basename match. Several movies can share a generic
+		// filename, so a single basename hit is too weak to trust. Only accept it
+		// when exactly one movie in the library has a file with this name; otherwise
+		// leave ownership unresolved and let the fail-closed flow continue safely.
+		if own.movie == nil {
+			var match *radarr.Movie
+			ambiguous := false
+			for _, movie := range movies {
+				if movie.HasFile && movie.MovieFile != nil &&
+					filepath.Base(movie.MovieFile.Path) == requestFileName {
+					if match != nil {
+						ambiguous = true
 						break
 					}
+					match = movie
 				}
-				if relativePath != "" {
-					strippedRelative := strings.TrimSuffix(relativePath, ".strm")
-					if strings.HasSuffix(movie.MovieFile.Path, relativePath) ||
-						strings.HasSuffix(strings.TrimSuffix(movie.MovieFile.Path, filepath.Ext(movie.MovieFile.Path)), strippedRelative) {
-						slog.InfoContext(ctx, "Found Radarr movie match by relative path suffix",
-							"radarr_path", movie.MovieFile.Path,
-							"relative_path", relativePath)
-						own.movie = movie
-						own.movieFileID = movie.MovieFile.ID
-						break
-					}
-				}
+			}
+			if ambiguous {
+				slog.WarnContext(ctx, "Skipping ambiguous Radarr filename match (multiple movies share this filename)",
+					"file_name", requestFileName)
+			} else if match != nil {
+				slog.InfoContext(ctx, "Found Radarr movie match by unique filename",
+					"movie", match.Title,
+					"path", match.MovieFile.Path)
+				own.movie = match
+				own.movieFileID = match.MovieFile.ID
 			}
 		}
 	}

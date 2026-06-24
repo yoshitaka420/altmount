@@ -404,12 +404,12 @@ func (lsw *LibrarySyncWorker) syncDatabaseRecords(
 	// Batch delete orphaned files
 	if len(filesToDelete) > 0 {
 		if !dryRun {
-			if _, err := lsw.healthRepo.DeleteHealthRecordsBulk(ctx, filesToDelete); err != nil {
+			if deleted, err := lsw.healthRepo.DeleteHealthRecordsBulk(ctx, filesToDelete); err != nil {
 				slog.ErrorContext(ctx, "Failed to delete orphaned health records",
 					"count", len(filesToDelete),
 					"error", err)
 			} else {
-				counts.deleted = len(filesToDelete)
+				counts.deleted = int(deleted)
 				slog.InfoContext(ctx, "Deleted orphaned health records",
 					"count", counts.deleted)
 			}

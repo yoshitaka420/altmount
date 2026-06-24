@@ -11,6 +11,7 @@ import type {
 } from "../../types/config";
 import { LoadingSpinner } from "../ui/LoadingSpinner";
 import { ArrsInstanceCard } from "./ArrsInstanceCard";
+import { ARR_TYPE_COLORS } from "./arrsTypeColors";
 
 interface ArrsConfigSectionProps {
 	config: ConfigResponse;
@@ -38,13 +39,24 @@ const DEFAULT_NEW_INSTANCE: NewInstanceForm = {
 };
 
 const ARR_TYPES: { type: ArrsType; label: string; color: string; defaultCategory: string }[] = [
-	// Distinct accents per type; minimal themes collapse primary/secondary/accent/info to one blue.
-	{ type: "radarr", label: "Radarr", color: "bg-warning", defaultCategory: "movies" },
-	{ type: "sonarr", label: "Sonarr", color: "bg-info", defaultCategory: "tv" },
-	{ type: "lidarr", label: "Lidarr", color: "bg-success", defaultCategory: "music" },
-	{ type: "readarr", label: "Readarr", color: "bg-error", defaultCategory: "books" },
-	{ type: "whisparr", label: "Whisparr", color: "bg-secondary", defaultCategory: "movies" },
-	{ type: "sportarr", label: "Sportarr", color: "bg-accent", defaultCategory: "sports" },
+	// Colors come from the shared ARR_TYPE_COLORS map so accents stay in sync with
+	// ArrsInstanceCard; minimal themes collapse primary/secondary/accent/info to one blue.
+	{ type: "radarr", label: "Radarr", color: ARR_TYPE_COLORS.radarr, defaultCategory: "movies" },
+	{ type: "sonarr", label: "Sonarr", color: ARR_TYPE_COLORS.sonarr, defaultCategory: "tv" },
+	{ type: "lidarr", label: "Lidarr", color: ARR_TYPE_COLORS.lidarr, defaultCategory: "music" },
+	{ type: "readarr", label: "Readarr", color: ARR_TYPE_COLORS.readarr, defaultCategory: "books" },
+	{
+		type: "whisparr",
+		label: "Whisparr",
+		color: ARR_TYPE_COLORS.whisparr,
+		defaultCategory: "movies",
+	},
+	{
+		type: "sportarr",
+		label: "Sportarr",
+		color: ARR_TYPE_COLORS.sportarr,
+		defaultCategory: "sports",
+	},
 ];
 
 export function ArrsConfigSection({

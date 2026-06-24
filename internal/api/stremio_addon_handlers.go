@@ -341,7 +341,10 @@ func (s *Server) handleStremioAddonPlay(c *fiber.Ctx) error {
 
 	baseURL := resolveBaseURL(c, cfg.Stremio.BaseURL)
 
-	safeFilename := safeTitle + ".nzb"
+	// The title is client-supplied and used to build the staged NZB path, so
+	// reduce it to a bare basename: path separators in the title must not be able
+	// to escape the per-request staging directory below.
+	safeFilename := sanitizeFilename(safeTitle) + ".nzb"
 	nzbName := safeTitle
 
 	// Short-circuit: return cached stream if already processed within TTL
@@ -399,7 +402,12 @@ func (s *Server) handleStremioAddonPlay(c *fiber.Ctx) error {
 		}
 		// Importer moves the NZB out on success; this clears the staged file / empty dir.
 		defer os.RemoveAll(stageDir)
-		tempPath := filepath.Join(stageDir, safeFilename)
+		// safeFilename is already a sanitized basename; this re-checks containment as
+		// defense-in-depth so the staged path can never land outside stageDir.
+		tempPath := filepath.Join(stageDir, filepath.Base(safeFilename))
+		if rel, relErr := filepath.Rel(stageDir, tempPath); relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("invalid staged NZB path for title %q", safeTitle)
+		}
 
 		// Download NZB from Prowlarr
 		prowlarrCfg := cfg.Stremio.Prowlarr

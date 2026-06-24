@@ -15,6 +15,24 @@ interface HealthConfigSectionProps {
 	isUpdating?: boolean;
 }
 
+// Defaults rendered by the triage inputs. They are materialized into the saved
+// payload so enabling triage persists the values the form shows instead of a
+// bare { enabled: true }.
+const DEFAULT_CORRUPTED_TRIAGE: Required<CorruptedTriageConfig> = {
+	enabled: false,
+	max_deletes_per_run: 50,
+	mass_event_threshold: 500,
+	backstop_interval_minutes: 360,
+};
+
+// When triage is enabled, fill in any missing numeric fields with their
+// displayed defaults so the persisted config matches the UI.
+function normalizeTriage(triage: CorruptedTriageConfig | undefined): CorruptedTriageConfig {
+	const current = triage ?? { enabled: false };
+	if (!current.enabled) return current;
+	return { ...DEFAULT_CORRUPTED_TRIAGE, ...current };
+}
+
 export function HealthConfigSection({
 	config,
 	onUpdate,
@@ -111,10 +129,13 @@ export function HealthConfigSection({
 		field: keyof CorruptedTriageConfig,
 		value: boolean | number | undefined,
 	) => {
+		// Start from the displayed defaults so toggling triage on materializes the
+		// 50/500/360 values into form state rather than persisting only { enabled }.
+		const base = { ...DEFAULT_CORRUPTED_TRIAGE, ...formData.corrupted_triage };
 		const newData = {
 			...formData,
 			corrupted_triage: {
-				...formData.corrupted_triage,
+				...base,
 				[field]: value,
 			},
 		};
@@ -125,7 +146,13 @@ export function HealthConfigSection({
 
 	const handleSave = async () => {
 		if (onUpdate && hasChanges && !validationError) {
-			await onUpdate("health", formData);
+			// Normalize so an enabled triage section always saves complete values,
+			// even if the user never touched the numeric fields.
+			const dataToSave: HealthConfig = {
+				...formData,
+				corrupted_triage: normalizeTriage(formData.corrupted_triage),
+			};
+			await onUpdate("health", dataToSave);
 			setHasChanges(false);
 		}
 	};

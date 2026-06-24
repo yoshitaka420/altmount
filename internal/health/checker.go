@@ -210,7 +210,7 @@ func (hc *HealthChecker) checkSingleFile(ctx context.Context, filePath string, i
 		return event
 	}
 	if result.MissingCount > 0 {
-		slog.InfoContext(ctx, "Missing segments within acceptable tolerance, treating as healthy",
+		slog.DebugContext(ctx, "Missing segments within acceptable tolerance, treating as healthy",
 			"file_path", filePath,
 			"missing", result.MissingCount,
 			"checked", result.TotalChecked,

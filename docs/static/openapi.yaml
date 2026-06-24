@@ -3287,6 +3287,9 @@ components:
           type: string
         url:
           type: string
+      required:
+        - api_key
+        - url
       type: object
     api.ArrsWebhookRequest:
       properties:

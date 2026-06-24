@@ -679,7 +679,7 @@ func (s *Server) handleArrsWebhook(c *fiber.Ctx) error {
 	// (replaced/unowned) gets the safe soft-delete treatment; freshly imported
 	// files resolve as owned and are kept. Runs in the background so it never
 	// blocks the webhook response, and is a no-op unless triage is enabled.
-	s.handoffToTriage(pathsToScan, normalize)
+	s.handoffToTriage(c.Context(), pathsToScan, normalize)
 
 	return RespondMessage(c, "Webhook processed")
 }
@@ -688,7 +688,7 @@ func (s *Server) handleArrsWebhook(c *fiber.Ctx) error {
 // It resolves a corrupted health record for each path (by library path, then by
 // normalized virtual path) and routes it through the fail-closed triage engine.
 // The work runs in a detached goroutine with its own timeout.
-func (s *Server) handoffToTriage(paths []string, normalize func(string) string) {
+func (s *Server) handoffToTriage(reqCtx context.Context, paths []string, normalize func(string) string) {
 	if s.healthWorker == nil || s.healthRepo == nil || len(paths) == 0 {
 		return
 	}
@@ -699,7 +699,10 @@ func (s *Server) handoffToTriage(paths []string, normalize func(string) string) 
 
 	pathsCopy := append([]string(nil), paths...)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		// Detach from the request lifecycle (so the response returning doesn't
+		// cancel the work) while preserving request-scoped values for downstream
+		// lookups and logging.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(reqCtx), 60*time.Second)
 		defer cancel()
 
 		slog.InfoContext(ctx, "ARR webhook handoff to corrupted-file triage", "candidate_paths", len(pathsCopy))

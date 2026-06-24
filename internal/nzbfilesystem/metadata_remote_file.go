@@ -2065,16 +2065,18 @@ func (mvf *MetadataVirtualFile) updateFileHealthOnError(dataCorruptionErr *usene
 	ctx, cancel := context.WithTimeout(mvf.ctx, 5*time.Second)
 	defer cancel()
 
-	// Shared error context for whichever path we take below.
+	// Shared error context for whichever path we take below. errorDetails is left
+	// to each branch so the persisted file_health.error_details matches the actual
+	// failure (missing article vs. content corruption).
 	errorMsg := dataCorruptionErr.Error()
 	sourceNzbPath := &mvf.meta.SourceNzbPath
 	if *sourceNzbPath == "" {
 		sourceNzbPath = nil
 	}
-	errorDetails := fmt.Sprintf(`{"missing_articles": %d, "total_articles": %d, "error_type": "ArticleNotFound"}`,
-		1, len(mvf.meta.SegmentData))
 
 	if dataCorruptionErr.Missing {
+		errorDetails := fmt.Sprintf(`{"missing_articles": %d, "total_articles": %d, "error_type": "ArticleNotFound"}`,
+			1, len(mvf.meta.SegmentData))
 		// Missing article (NNTP 430). A single streaming miss can be transient or
 		// seek-only, so we do NOT condemn here: we neither mark the metadata
 		// corrupted nor move the .meta to corrupted_metadata nor set
@@ -2112,6 +2114,12 @@ func (mvf *MetadataVirtualFile) updateFileHealthOnError(dataCorruptionErr *usene
 		// wrongly pass it. Condemn directly, exactly as before: mark the metadata
 		// corrupted, move the .meta to the safety folder (if imported) and set
 		// repair_triggered for immediate arr-driven replacement.
+		//
+		// The article is present, so report content corruption (not missing
+		// articles) in the persisted error details.
+		errorDetails := fmt.Sprintf(`{"missing_articles": %d, "total_articles": %d, "error_type": "DataCorruption"}`,
+			0, len(mvf.meta.SegmentData))
+
 		if err := mvf.metadataService.UpdateFileStatus(mvf.name, metapb.FileStatus_FILE_STATUS_CORRUPTED); err != nil {
 			slog.WarnContext(ctx, "Failed to update metadata status", "file", mvf.name, "error", err)
 		}

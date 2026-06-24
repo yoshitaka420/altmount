@@ -296,7 +296,8 @@ fieldset {
 		backdrop-filter: none;
 		-webkit-backdrop-filter: none;
 	}
-	:is([data-theme="glass-dark"], [data-theme="glass-light"]) .menu [aria-current="page"] {
+	:is([data-theme="glass-dark"], [data-theme="glass-light"]) .menu [aria-current="page"],
+	:is([data-theme="glass-dark"], [data-theme="glass-light"]) .menu :is(a, button).bg-primary {
 		background-color: var(--color-primary);
 		color: var(--color-primary-content);
 		backdrop-filter: none;

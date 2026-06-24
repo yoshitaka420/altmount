@@ -495,11 +495,12 @@ export function SABnzbdConfigSection({
 												type="button"
 												className="-translate-y-1/2 btn btn-ghost btn-sm absolute top-1/2 right-2"
 												onClick={() => setShowApiKey(!showApiKey)}
+												aria-label={showApiKey ? "Hide fallback API key" : "Show fallback API key"}
 											>
 												{showApiKey ? (
-													<EyeOff className="h-4 w-4 text-base-content/70" />
+													<EyeOff className="h-4 w-4 text-base-content/70" aria-hidden="true" />
 												) : (
-													<Eye className="h-4 w-4 text-base-content/70" />
+													<Eye className="h-4 w-4 text-base-content/70" aria-hidden="true" />
 												)}
 											</button>
 										</div>

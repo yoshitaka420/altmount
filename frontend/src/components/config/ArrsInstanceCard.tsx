@@ -2,6 +2,7 @@ import { Activity, Eye, EyeOff, Globe, Key, Tag, Trash2 } from "lucide-react";
 import { useCallback, useState } from "react";
 import type { ArrsInstanceConfig, ArrsType, SABnzbdCategory } from "../../types/config";
 import { LoadingSpinner } from "../ui/LoadingSpinner";
+import { ARR_TYPE_COLOR_FALLBACK, ARR_TYPE_COLORS } from "./arrsTypeColors";
 
 interface ArrsInstanceCardProps {
 	instance: ArrsInstanceConfig;
@@ -73,25 +74,8 @@ export function ArrsInstanceCard({
 		[onInstanceChange],
 	);
 
-	// Mirror ARR_TYPES in ArrsConfigSection: distinct accents per type.
-	const getBorderColor = () => {
-		switch (type) {
-			case "radarr":
-				return "bg-warning";
-			case "sonarr":
-				return "bg-info";
-			case "lidarr":
-				return "bg-success";
-			case "readarr":
-				return "bg-error";
-			case "whisparr":
-				return "bg-secondary";
-			case "sportarr":
-				return "bg-accent";
-			default:
-				return "bg-base-300";
-		}
-	};
+	// Accent per type from the shared ARR_TYPE_COLORS source of truth.
+	const getBorderColor = () => ARR_TYPE_COLORS[type] ?? ARR_TYPE_COLOR_FALLBACK;
 
 	return (
 		<div

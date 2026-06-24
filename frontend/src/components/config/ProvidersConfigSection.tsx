@@ -490,7 +490,7 @@ export function ProvidersConfigSection({
 							</span>
 							<span className="truncate font-bold font-mono text-xs">
 								{provider.last_speed_test_mbps !== undefined
-									? `${provider.last_speed_test_mbps.toFixed(1)} MB/s`
+									? `${provider.last_speed_test_mbps.toFixed(1)} Mbps`
 									: "---"}
 							</span>
 						</div>
