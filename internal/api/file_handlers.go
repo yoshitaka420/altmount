@@ -421,20 +421,31 @@ func (s *Server) handleBatchExportNZB(c *fiber.Ctx) error {
 
 	// Preflight: confirm at least one file is actually exportable BEFORE committing
 	// response headers. The ZIP is streamed (headers go out before any entry is
-	// written), so without this check a library where every candidate is an archive
-	// or AES-encrypted would stream an empty ZIP with a 200 instead of surfacing the
-	// no-exportable-files failure. We stop at the first exportable entry to keep the
-	// common (non-empty) path cheap.
+	// written), so without this check a library where nothing can be exported would
+	// stream an empty ZIP with a 200 instead of surfacing the failure. We stop at the
+	// first exportable entry to keep the common (non-empty) path cheap, and track
+	// whether the non-exportable files were deliberate skips (archives/AES) or
+	// read/convert failures so the error reflects the real cause.
 	hasExportable := false
+	sawSkip := false
 	for _, metaPath := range metadataFiles {
-		if _, _, _, ok := s.tryBuildExportNZB(ctx, metaPath, metadataRootPath, virtualRootPath); ok {
+		_, _, skipped, ok := s.tryBuildExportNZB(ctx, metaPath, metadataRootPath, virtualRootPath)
+		if ok {
 			hasExportable = true
 			break
 		}
+		if skipped {
+			sawSkip = true
+		}
 	}
 	if !hasExportable {
-		return RespondError(c, fiber.StatusNotFound, ErrCodeNotFound, "No files were exported",
-			"All metadata files were archives or AES-encrypted")
+		if sawSkip {
+			return RespondError(c, fiber.StatusNotFound, ErrCodeNotFound, "No files were exported",
+				"All exportable metadata files were archives or AES-encrypted")
+		}
+		// Nothing was a deliberate skip: every file failed to read or convert.
+		return RespondInternalError(c, "Failed to export NZB files",
+			"No metadata files could be read or converted to NZB")
 	}
 
 	// Set ZIP headers before streaming begins.
@@ -515,10 +526,9 @@ func (s *Server) tryBuildExportNZB(ctx context.Context, metaPath, metadataRootPa
 	virtualFilename := strings.TrimSuffix(relPath, ".meta")
 
 	// Check if should exclude based on archive pattern
-	// Archives and AES-encrypted files are always excluded
+	// Archives and AES-encrypted files are always excluded. No per-file log here:
+	// this runs once per file in the export hot path; the caller reports skipped_count.
 	if shouldExcludeFile(virtualFilename, true) {
-		slog.DebugContext(ctx, "Skipping archive file",
-			"filename", virtualFilename)
 		return "", nil, true, false
 	}
 

@@ -113,6 +113,7 @@ export function StreamingConfigSection({
 							step="1"
 							className="range range-primary range-sm w-full [&::-webkit-slider-runnable-track]:rounded-full"
 							disabled={isReadOnly}
+							aria-label="Segment prefetch (articles ahead of playback)"
 							onChange={(e) =>
 								handleStreamingChange("max_prefetch", Number.parseInt(e.target.value, 10))
 							}
@@ -130,7 +131,7 @@ export function StreamingConfigSection({
 
 				{/* Guidance */}
 				<div className="alert items-start rounded-2xl border border-info/20 bg-info/5 p-4 shadow-sm">
-					<Info className="mt-0.5 h-5 w-5 shrink-0 text-info" />
+					<Info className="mt-0.5 h-5 w-5 shrink-0 text-info" aria-hidden="true" />
 					<div className="min-w-0 flex-1">
 						<div className="font-bold text-info text-xs uppercase tracking-wider">
 							Performance Note
@@ -165,6 +166,7 @@ export function StreamingConfigSection({
 						className="toggle toggle-primary"
 						checked={streamingData.failure_masking.enabled === true}
 						disabled={isReadOnly}
+						aria-label="Enable failure masking"
 						onChange={(e) => handleMaskingChange("enabled", e.target.checked)}
 					/>
 				</div>
@@ -197,6 +199,7 @@ export function StreamingConfigSection({
 							step="1"
 							className="range range-primary range-sm w-full [&::-webkit-slider-runnable-track]:rounded-full"
 							disabled={isReadOnly || !streamingData.failure_masking.enabled}
+							aria-label="Failure masking threshold (failures before hiding)"
 							onChange={(e) =>
 								handleMaskingChange("threshold", Number.parseInt(e.target.value, 10))
 							}
@@ -213,7 +216,7 @@ export function StreamingConfigSection({
 
 				{/* Guidance */}
 				<div className="alert items-start rounded-2xl border border-info/20 bg-info/5 p-4 shadow-sm">
-					<Info className="mt-0.5 h-5 w-5 shrink-0 text-info" />
+					<Info className="mt-0.5 h-5 w-5 shrink-0 text-info" aria-hidden="true" />
 					<div className="min-w-0 flex-1">
 						<div className="font-bold text-info text-xs uppercase tracking-wider">
 							Repair Workflow
@@ -253,6 +256,7 @@ export function StreamingConfigSection({
 						className="toggle toggle-primary"
 						checked={cacheData.enabled === true}
 						disabled={isReadOnly}
+						aria-label="Enable segment cache"
 						onChange={(e) => handleCacheChange("enabled", e.target.checked)}
 					/>
 				</div>
@@ -274,6 +278,7 @@ export function StreamingConfigSection({
 								value={cacheData.cache_path}
 								disabled={isReadOnly}
 								placeholder="/tmp/altmount-segcache"
+								aria-label="Segment cache path"
 								onChange={(e) => handleCacheChange("cache_path", e.target.value)}
 							/>
 						</div>
@@ -304,6 +309,7 @@ export function StreamingConfigSection({
 									step="1"
 									className="range range-primary range-sm w-full [&::-webkit-slider-runnable-track]:rounded-full"
 									disabled={isReadOnly}
+									aria-label="Maximum cache size (GB)"
 									onChange={(e) =>
 										handleCacheChange("max_size_gb", Number.parseInt(e.target.value, 10))
 									}
@@ -346,6 +352,7 @@ export function StreamingConfigSection({
 									step="1"
 									className="range range-primary range-sm w-full [&::-webkit-slider-runnable-track]:rounded-full"
 									disabled={isReadOnly}
+									aria-label="Cache expiry (hours)"
 									onChange={(e) =>
 										handleCacheChange("expiry_hours", Number.parseInt(e.target.value, 10))
 									}
@@ -362,7 +369,7 @@ export function StreamingConfigSection({
 
 						{/* Info box */}
 						<div className="fade-in slide-in-from-top-2 alert animate-in items-start rounded-2xl border border-info/20 bg-info/5 p-4 shadow-sm">
-							<Info className="mt-0.5 h-5 w-5 shrink-0 text-info" />
+							<Info className="mt-0.5 h-5 w-5 shrink-0 text-info" aria-hidden="true" />
 							<div className="min-w-0 flex-1">
 								<div className="font-bold text-info text-xs uppercase tracking-wider">
 									How It Works
