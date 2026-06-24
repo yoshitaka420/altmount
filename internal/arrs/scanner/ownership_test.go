@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/javi11/altmount/internal/arrs/data"
@@ -268,9 +269,11 @@ func TestResolveRadarrOwnership_TMDBFallbackResolvesWhenNotReplaced(t *testing.T
 
 func TestResolveSonarrOwnership_ByID(t *testing.T) {
 	// With both series and episode-file IDs in metadata, no HTTP calls happen.
-	called := false
+	// called is written from the httptest handler goroutine and read from the test
+	// goroutine, so use an atomic to keep the assertion race-free under -race.
+	var called atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
+		called.Store(true)
 		t.Errorf("unexpected request: %s", r.URL.String())
 	}))
 	defer srv.Close()
@@ -288,7 +291,7 @@ func TestResolveSonarrOwnership_ByID(t *testing.T) {
 	if own.seriesID != 12 || own.episodeFileID != 555 {
 		t.Fatalf("seriesID=%d episodeFileID=%d; want 12/555", own.seriesID, own.episodeFileID)
 	}
-	if called {
+	if called.Load() {
 		t.Errorf("expected no HTTP calls for ID-based resolution")
 	}
 }

@@ -35,9 +35,9 @@ export function IndexerHealthFilters({
 
 			<div className="flex flex-wrap items-center gap-3">
 				<fieldset className="flex flex-wrap items-center gap-1.5" aria-label="Status Filters">
-					<span className="mr-1 font-bold text-[10px] text-base-content/40 uppercase tracking-wider">
+					<legend className="mr-1 font-bold text-[10px] text-base-content/40 uppercase tracking-wider">
 						Filter
-					</span>
+					</legend>
 					{(["all", "excellent", "moderate", "poor"] as const).map((filter) => {
 						const active = statusFilter === filter;
 						let btnClass =

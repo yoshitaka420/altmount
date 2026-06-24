@@ -432,17 +432,18 @@ func TestResolveOwnership_LidarrOwnedFileStillReferenced(t *testing.T) {
 	}
 }
 
-func TestResolveOwnership_LidarrReplaced(t *testing.T) {
-	// Dead track-file 555 is gone from the artist, and the same album now has a
-	// different file (999) -> Replaced.
+func TestResolveOwnership_LidarrAlbumSiblingNotReplaced(t *testing.T) {
+	// Dead track-file 555 is gone from the artist. The album lists a different file,
+	// but an album holds many tracks, so that file can't be proven to replace THIS
+	// track rather than being a sibling. Ownership must stay Owned (conservative
+	// keep) — never Replaced — so triage never deletes on a sibling-track guess. The
+	// album track-file endpoint must not even be consulted for a replacement.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/artist/3"):
 			_, _ = w.Write([]byte(`{"id":3,"path":"/music/Pink Floyd"}`))
 		case strings.HasSuffix(r.URL.Path, "/trackfile") && r.URL.Query().Get("artistId") == "3":
 			_, _ = w.Write([]byte(`[{"id":700,"path":"/music/Pink Floyd/other.flac"}]`))
-		case strings.HasSuffix(r.URL.Path, "/trackfile") && r.URL.Query().Get("albumId") == "42":
-			_, _ = w.Write([]byte(`[{"id":999,"path":"/music/Pink Floyd/The Wall/track-2024.flac"}]`))
 		default:
 			t.Errorf("unexpected request: %s", r.URL.String())
 		}
@@ -458,11 +459,11 @@ func TestResolveOwnership_LidarrReplaced(t *testing.T) {
 	}
 
 	got := mgr.ResolveOwnership(context.Background(), "/music/Pink Floyd/The Wall/track.flac", "", meta)
-	if got.Status != model.OwnershipReplaced {
-		t.Fatalf("status = %v; want replaced", got.Status)
+	if got.Status != model.OwnershipOwned {
+		t.Fatalf("status = %v; want owned (an album sibling is not a confirmed replacement)", got.Status)
 	}
-	if got.ReplacementID != 999 {
-		t.Errorf("replacementID = %d; want 999", got.ReplacementID)
+	if got.ReplacementID != 0 {
+		t.Errorf("replacementID = %d; want 0", got.ReplacementID)
 	}
 }
 

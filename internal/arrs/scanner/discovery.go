@@ -24,7 +24,11 @@ var (
 	// boundary so a dashed resolution suffix (e.g. S01E01-1080p) is not mistaken
 	// for an episode range.
 	tvMultiEpisodePattern = regexp.MustCompile(`(?i)S\d{1,4}E\d{1,4}(?:[\s._-]*E\d{1,4}|-\d{1,4}\b)`)
-	tvDatePattern         = regexp.MustCompile(`(?i)\d{4}.\d{2}.\d{2}`)
+	// tvDatePattern matches the YYYY-MM-DD form used by daily shows. The separators
+	// are an explicit class ([._-]) rather than the "." wildcard, so titles that
+	// merely contain eight digits around arbitrary characters aren't misclassified
+	// as dailies.
+	tvDatePattern = regexp.MustCompile(`(?i)\d{4}[._-]\d{2}[._-]\d{2}`)
 )
 
 // DiscoverFileMetadata attempts to find the rich metadata for a file by searching ARR instances.

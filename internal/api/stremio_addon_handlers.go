@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -399,7 +400,9 @@ func (s *Server) handleStremioAddonPlay(c *fiber.Ctx) error {
 		}
 		// Importer moves the NZB out on success; this clears the staged file / empty dir.
 		defer os.RemoveAll(stageDir)
-		tempPath := filepath.Join(stageDir, safeFilename)
+		// Sanitize to a bare base filename: the title is request-controlled, so a value
+		// like "../../etc/x" must not let the staged write escape stageDir.
+		tempPath := filepath.Join(stageDir, sanitizeFilename(filepath.Base(safeFilename)))
 
 		// Download NZB from Prowlarr
 		prowlarrCfg := cfg.Stremio.Prowlarr
@@ -410,7 +413,9 @@ func (s *Server) handleStremioAddonPlay(c *fiber.Ctx) error {
 		)
 		nzbData, err := client.DownloadNZB(workCtx, downloadURL)
 		if err != nil {
-			return nil, fmt.Errorf("failed to download NZB from Prowlarr: %w", err)
+			// Do NOT wrap the raw transport error: it embeds the Prowlarr download URL
+			// (and its API token), which must not reach logs or the client response.
+			return nil, errors.New("failed to download NZB from Prowlarr")
 		}
 		if err := os.WriteFile(tempPath, nzbData, 0644); err != nil {
 			return nil, fmt.Errorf("failed to write NZB temp file: %w", err)
@@ -440,7 +445,9 @@ func (s *Server) handleStremioAddonPlay(c *fiber.Ctx) error {
 	})
 	if err != nil {
 		slog.WarnContext(ctx, "Failed to prepare Stremio NZB stream", "error", err, "title", safeTitle)
-		return RespondServiceUnavailable(c, "Failed to prepare NZB stream", err.Error())
+		// Don't echo internal error text to the client: it can carry sensitive
+		// Prowlarr URL/token details from the downloader path.
+		return RespondServiceUnavailable(c, "Failed to prepare NZB stream", "")
 	}
 
 	itemID, ok := v.(int64)

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ConfigResponse, NetworkConfig, NzblnkConfig } from "../../types/config";
 
 interface NetworkConfigSectionProps {
@@ -23,8 +23,13 @@ export function NetworkConfigSection({
 	const [data, setData] = useState<NetworkConfig>(config.network ?? emptyNetwork);
 	const [nzblnk, setNzblnk] = useState<NzblnkConfig>(config.nzblnk ?? {});
 	const [hasChanges, setHasChanges] = useState(false);
+	// True while the two-step (network + nzblnk) save is mid-flight. The first PATCH
+	// refetches and updates config.network before the nzblnk PATCH runs, which would
+	// otherwise make this effect reset the still-unsaved nzblnk edit out of the UI.
+	const savingRef = useRef(false);
 
 	useEffect(() => {
+		if (savingRef.current) return;
 		setData(config.network ?? emptyNetwork);
 		setNzblnk(config.nzblnk ?? {});
 		setHasChanges(false);
@@ -55,13 +60,23 @@ export function NetworkConfigSection({
 		// per-section PATCH calls can't drop the pending edits.
 		const networkToSave = data;
 		const nzblnkToSave = nzblnk;
-		if (JSON.stringify(networkToSave) !== JSON.stringify(config.network ?? emptyNetwork)) {
-			await onUpdate("network", networkToSave);
+		// Suppress the full sync-effect reset while both PATCHes are in flight so the
+		// slice that hasn't been saved yet is never wiped from the UI mid-save.
+		savingRef.current = true;
+		try {
+			if (JSON.stringify(networkToSave) !== JSON.stringify(config.network ?? emptyNetwork)) {
+				await onUpdate("network", networkToSave);
+			}
+			if (JSON.stringify(nzblnkToSave) !== JSON.stringify(config.nzblnk ?? {})) {
+				await onUpdate("nzblnk", nzblnkToSave);
+			}
+			// Reflect the saved values directly; the refetched config will match.
+			setData(networkToSave);
+			setNzblnk(nzblnkToSave);
+			setHasChanges(false);
+		} finally {
+			savingRef.current = false;
 		}
-		if (JSON.stringify(nzblnkToSave) !== JSON.stringify(config.nzblnk ?? {})) {
-			await onUpdate("nzblnk", nzblnkToSave);
-		}
-		setHasChanges(false);
 	};
 
 	return (

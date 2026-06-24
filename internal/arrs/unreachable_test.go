@@ -61,8 +61,8 @@ func TestIsUnreachableError(t *testing.T) {
 	}
 }
 
-// TestUnreachableNotMisclassifiedAsLogical guards the precedence: a transport error
-// must win even if its message vaguely resembles a logical one.
+// TestIsUnreachableError_PrecedenceTransportWins guards the precedence: a transport
+// error must win even if its message vaguely resembles a logical one.
 func TestIsUnreachableError_PrecedenceTransportWins(t *testing.T) {
 	// A DNS failure whose surrounding message mentions a series lookup must still
 	// be unreachable, not condemned.

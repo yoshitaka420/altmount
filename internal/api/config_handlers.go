@@ -524,8 +524,10 @@ func (s *Server) handleCreateProvider(c *fiber.Ctx) error {
 
 	// Create new provider
 	newProvider := config.ProviderConfig{
-		ID:                       newID,
-		Name:                     createReq.Name,
+		ID: newID,
+		// Trim the display name so all-whitespace input collapses to empty and the
+		// provider.host fallback (used by the UI) can still kick in.
+		Name:                     strings.TrimSpace(createReq.Name),
 		Host:                     createReq.Host,
 		Port:                     createReq.Port,
 		Username:                 createReq.Username,
@@ -739,7 +741,9 @@ func (s *Server) handleUpdateProvider(c *fiber.Ctx) error {
 		provider.AccountExpirationDate = *updateReq.AccountExpirationDate
 	}
 	if updateReq.Name != nil {
-		provider.Name = *updateReq.Name
+		// Trim so all-whitespace input collapses to empty and the provider.host
+		// fallback can still kick in.
+		provider.Name = strings.TrimSpace(*updateReq.Name)
 	}
 
 	// Assign the updated provider back to the slice

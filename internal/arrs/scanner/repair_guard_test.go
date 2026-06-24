@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -53,8 +54,21 @@ func newSonarrRepairServer(t *testing.T, rec *sonarrRepairRecorder, episodeFileP
 		// History lookup for blocklisting (empty -> no-op, non-fatal).
 		case strings.HasSuffix(path, "/history"):
 			_, _ = w.Write([]byte(`{"page":1,"pageSize":100,"totalRecords":0,"records":[]}`))
-		// EpisodeSearch command.
+		// EpisodeSearch command. Only count it as the fallback re-search when the
+		// request is actually a POST carrying the EpisodeSearch command, so a wrong
+		// method or payload can't make the test pass.
 		case strings.HasSuffix(path, "/command"):
+			if r.Method != http.MethodPost {
+				t.Errorf("command request method = %s; want POST", r.Method)
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), `"EpisodeSearch"`) {
+				t.Errorf("command body = %q; want an EpisodeSearch command", string(body))
+				http.Error(w, "bad command", http.StatusBadRequest)
+				return
+			}
 			rec.searchCalled = true
 			_, _ = w.Write([]byte(`{"id":1,"name":"EpisodeSearch"}`))
 		default:

@@ -1,5 +1,5 @@
 import { AlertTriangle, BarChart3, Radio, RefreshCw, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useConfirm } from "../../../../contexts/ModalContext";
 import { useToast } from "../../../../contexts/ToastContext";
 import { useCleanupIndexerStats, useIndexerStats } from "../../../../hooks/useApi";
@@ -74,44 +74,50 @@ export function IndexerHealth() {
 		}
 	};
 
-	const handleDeleteIndexer = async (indexer: string) => {
-		const confirmed = await confirmAction(
-			"Delete Indexer Stats",
-			`Are you sure you want to delete all statistics for "${indexer}"? This action cannot be undone.`,
-			{
-				type: "error",
-				confirmText: "Delete",
-				confirmButtonClass: "btn-error",
-				verificationText: indexer,
-			},
-		);
-		if (!confirmed) return;
-		try {
-			await cleanupStats.mutateAsync({ indexer });
-			showToast({
-				title: "Indexer Stats Deleted",
-				message: `Successfully deleted statistics for ${indexer}.`,
-				type: "success",
-			});
-			void refetch();
-		} catch {
-			showToast({
-				title: "Delete Failed",
-				message: `Failed to delete stats for ${indexer}.`,
-				type: "error",
-			});
-		}
-	};
+	const handleDeleteIndexer = useCallback(
+		async (indexer: string) => {
+			const confirmed = await confirmAction(
+				"Delete Indexer Stats",
+				`Are you sure you want to delete all statistics for "${indexer}"? This action cannot be undone.`,
+				{
+					type: "error",
+					confirmText: "Delete",
+					confirmButtonClass: "btn-error",
+					verificationText: indexer,
+				},
+			);
+			if (!confirmed) return;
+			try {
+				await cleanupStats.mutateAsync({ indexer });
+				showToast({
+					title: "Indexer Stats Deleted",
+					message: `Successfully deleted statistics for ${indexer}.`,
+					type: "success",
+				});
+				void refetch();
+			} catch {
+				showToast({
+					title: "Delete Failed",
+					message: `Failed to delete stats for ${indexer}.`,
+					type: "error",
+				});
+			}
+		},
+		[confirmAction, cleanupStats, showToast, refetch],
+	);
 
-	const handleSort = (key: SortKey) => {
-		if (sortKey === key) {
-			setSortAsc(!sortAsc);
-		} else {
-			setSortKey(key);
-			// Text column defaults to ascending; numeric/time columns to descending.
-			setSortAsc(key === "name");
-		}
-	};
+	const handleSort = useCallback(
+		(key: SortKey) => {
+			if (sortKey === key) {
+				setSortAsc(!sortAsc);
+			} else {
+				setSortKey(key);
+				// Text column defaults to ascending; numeric/time columns to descending.
+				setSortAsc(key === "name");
+			}
+		},
+		[sortKey, sortAsc],
+	);
 
 	const sorted = useMemo(() => {
 		if (!stats) return [];

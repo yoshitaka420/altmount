@@ -43,6 +43,17 @@ func (h dialectHelper) DatetimePlusHour() string {
 	return "datetime('now', '+1 hour')"
 }
 
+// DatetimeHoursAgo returns an expression equivalent to "now - n hours".
+//
+//   - SQLite: datetime('now', '-N hours')
+//   - PostgreSQL: NOW() - INTERVAL 'N hours'
+func (h dialectHelper) DatetimeHoursAgo(n int) string {
+	if h.IsPostgres() {
+		return fmt.Sprintf("NOW() - INTERVAL '%d hours'", n)
+	}
+	return fmt.Sprintf("datetime('now', '-%d hours')", n)
+}
+
 // ColumnPlusMinutes returns an expression that adds n minutes to a column value.
 //
 //   - SQLite: datetime(col, '+N minutes')

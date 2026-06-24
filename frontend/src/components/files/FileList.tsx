@@ -79,10 +79,13 @@ export function FileList({
 		overscan: 5,
 	});
 
-	// Row heights change when the column count changes, so force a re-measure.
+	// Row heights change when the column count changes, so force a re-measure
+	// whenever itemsPerRow changes (responsive breakpoints) — not just on mount.
+	// itemsPerRow isn't read inside the effect but is the intended trigger.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: itemsPerRow is the re-measure trigger
 	useEffect(() => {
 		rowVirtualizer.measure();
-	}, [rowVirtualizer]);
+	}, [rowVirtualizer, itemsPerRow]);
 
 	const getFileIcon = (file: WebDAVFile) => {
 		if (file.type === "directory") {

@@ -800,6 +800,9 @@ func (s *Service) FindAndUpdatePendingUpload(ctx context.Context, filename strin
 			continue
 		}
 
+		// Preserve the stored priority when no override is supplied. it.Priority is
+		// populated by GetPendingQueueItemsByPathPrefix, so this keeps the existing
+		// value instead of clobbering it with a zero default.
 		prio := it.Priority
 		if priority != nil {
 			prio = *priority

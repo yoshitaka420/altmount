@@ -4,6 +4,14 @@ interface HealthStatsCardsProps {
 	stats: HealthStats | undefined;
 }
 
+interface HealthStatCard {
+	label: string;
+	value: number;
+	valueClass: string;
+	caption: string;
+	captionClass?: string;
+}
+
 export function HealthStatsCards({ stats }: HealthStatsCardsProps) {
 	if (!stats) {
 		return null;
@@ -14,13 +22,7 @@ export function HealthStatsCards({ stats }: HealthStatsCardsProps) {
 	const corruptedPercentage =
 		stats.total > 0 ? ((stats.corrupted / stats.total) * 100).toFixed(1) : "0.0";
 
-	const cards: {
-		label: string;
-		value: number;
-		valueClass: string;
-		caption: string;
-		captionClass?: string;
-	}[] = [
+	const cards: HealthStatCard[] = [
 		{
 			label: "Files Tracked",
 			value: stats.total,

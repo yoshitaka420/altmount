@@ -249,7 +249,7 @@ func (s *Service) RegisterConfigChangeHandler(ctx context.Context, configManager
 func (s *Service) TriggerFileRescan(ctx context.Context, pathForRescan string, relativePath string, metadataStr *string) error {
 	err := s.scanner.TriggerFileRescan(ctx, pathForRescan, relativePath, metadataStr)
 	if err != nil && IsUnreachableError(err) {
-		return fmt.Errorf("%w: %v", ErrArrUnreachable, err)
+		return fmt.Errorf("%w: %w", ErrArrUnreachable, err)
 	}
 	return err
 }

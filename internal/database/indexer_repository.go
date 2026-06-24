@@ -35,19 +35,21 @@ func logIndexerImport(ctx context.Context, db DBQuerier, indexer string, status 
 	return err
 }
 
-func getIndexerHealthStats(ctx context.Context, db DBQuerier) ([]*IndexerAggregatedHealth, error) {
-	query := `
+func getIndexerHealthStats(ctx context.Context, db DBQuerier, dialect dialectHelper) ([]*IndexerAggregatedHealth, error) {
+	// The 24-hour cutoff is dialect-specific: datetime('now', '-24 hours') is SQLite
+	// only, so build it through the dialect helper to keep the Postgres path correct.
+	query := fmt.Sprintf(`
 		SELECT
 			indexer,
 			COUNT(*) as total_imports,
 			SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success_count,
 			SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count,
-			SUM(CASE WHEN created_at >= datetime('now', '-24 hours') THEN 1 ELSE 0 END) as last_24h_count,
+			SUM(CASE WHEN created_at >= %s THEN 1 ELSE 0 END) as last_24h_count,
 			MAX(created_at) as last_seen_at
 		FROM indexer_import_stats
 		GROUP BY indexer
 		ORDER BY total_imports DESC
-	`
+	`, dialect.DatetimeHoursAgo(24))
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -118,7 +120,7 @@ func (r *Repository) LogIndexerImport(ctx context.Context, indexer string, statu
 
 // GetIndexerHealthStats aggregates all historical records to calculate success/failure rates.
 func (r *Repository) GetIndexerHealthStats(ctx context.Context) ([]*IndexerAggregatedHealth, error) {
-	return getIndexerHealthStats(ctx, r.db)
+	return getIndexerHealthStats(ctx, r.db, r.dialect)
 }
 
 // PruneIndexerStats deletes records that were created within the last N hours.
@@ -140,7 +142,7 @@ func (r *QueueRepository) LogIndexerImport(ctx context.Context, indexer string, 
 
 // GetIndexerHealthStats aggregates all historical records to calculate success/failure rates.
 func (r *QueueRepository) GetIndexerHealthStats(ctx context.Context) ([]*IndexerAggregatedHealth, error) {
-	return getIndexerHealthStats(ctx, r.db)
+	return getIndexerHealthStats(ctx, r.db, r.dialect)
 }
 
 // PruneIndexerStats deletes records that were created within the last N hours.

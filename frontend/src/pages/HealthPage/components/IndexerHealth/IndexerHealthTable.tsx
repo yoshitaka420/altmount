@@ -18,17 +18,19 @@ interface IndexerHealthTableProps {
 	onDelete: (indexer: string) => void;
 }
 
-const SortIcon = ({
-	field,
-	sortKey,
-	sortAsc,
-}: {
+interface SortIconProps {
 	field: SortKey;
 	sortKey: SortKey;
 	sortAsc: boolean;
-}) => {
-	if (sortKey !== field) return <ArrowUpDown className="h-3 w-3 opacity-30" />;
-	return sortAsc ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />;
+}
+
+const SortIcon = ({ field, sortKey, sortAsc }: SortIconProps) => {
+	if (sortKey !== field) return <ArrowUpDown className="h-3 w-3 opacity-30" aria-hidden="true" />;
+	return sortAsc ? (
+		<ArrowUp className="h-3 w-3" aria-hidden="true" />
+	) : (
+		<ArrowDown className="h-3 w-3" aria-hidden="true" />
+	);
 };
 
 function tierClasses(rate: number) {
@@ -83,12 +85,18 @@ export function IndexerHealthTable({
 								{columns.map((col) => (
 									<th
 										key={col.field}
-										className="cursor-pointer transition-colors hover:bg-base-200"
-										onClick={() => onSort(col.field)}
+										className="p-0"
+										aria-sort={
+											sortKey === col.field ? (sortAsc ? "ascending" : "descending") : "none"
+										}
 									>
-										<div className="flex items-center gap-1">
+										<button
+											type="button"
+											className="flex w-full cursor-pointer items-center gap-1 px-4 py-3 text-left font-bold transition-colors hover:bg-base-200"
+											onClick={() => onSort(col.field)}
+										>
 											{col.label} <SortIcon field={col.field} sortKey={sortKey} sortAsc={sortAsc} />
-										</div>
+										</button>
 									</th>
 								))}
 								<th>Actions</th>

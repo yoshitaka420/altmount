@@ -27,10 +27,14 @@ export async function copyToClipboard(text: string): Promise<boolean> {
 		textarea.style.top = "-9999px";
 		textarea.style.opacity = "0";
 		document.body.appendChild(textarea);
-		textarea.select();
-		const ok = document.execCommand("copy");
-		document.body.removeChild(textarea);
-		return ok;
+		// Always remove the node, even if select()/execCommand() throws, so repeated
+		// failures don't accumulate hidden textareas in the DOM.
+		try {
+			textarea.select();
+			return document.execCommand("copy");
+		} finally {
+			document.body.removeChild(textarea);
+		}
 	} catch {
 		return false;
 	}
@@ -112,7 +116,17 @@ export function formatExpirationDate(date?: string): string {
 	if (!date) return "";
 	const [year, month, day] = date.split("-").map(Number);
 	if (!year || !month || !day) return date;
-	return new Date(year, month - 1, day).toLocaleDateString(undefined, {
+	const parsed = new Date(year, month - 1, day);
+	// Reject inputs that don't round-trip (e.g. 2024-02-30 silently rolling to Mar 1)
+	// and return the original string so callers don't display a different real date.
+	if (
+		parsed.getFullYear() !== year ||
+		parsed.getMonth() !== month - 1 ||
+		parsed.getDate() !== day
+	) {
+		return date;
+	}
+	return parsed.toLocaleDateString(undefined, {
 		year: "numeric",
 		month: "short",
 		day: "numeric",

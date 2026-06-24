@@ -33,8 +33,11 @@ func IsUnreachableError(err error) bool {
 		return false
 	}
 
-	// Timeouts: context deadline or any net.Error reporting a timeout.
-	if errors.Is(err, context.DeadlineExceeded) {
+	// Timeouts and cancellation: a context deadline, an explicit cancel, or any
+	// net.Error reporting a timeout. A canceled context (e.g. the worker shutting
+	// down mid-repair) is not a verdict on the file, so callers should DEFER repair
+	// rather than condemn it.
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return true
 	}
 	var netErr net.Error
@@ -69,7 +72,10 @@ func IsUnreachableError(err error) bool {
 	}
 
 	// Conservative string fallback for transport phrases that don't always reach
-	// us as typed errors through the starr/http stack.
+	// us as typed errors through the starr/http stack. NOTE: this matches on error
+	// message text, so upstream formatting changes (starr/net/http) can silently
+	// shift classification — extend this list cautiously and prefer typed checks
+	// above whenever the error kind is available.
 	msg := strings.ToLower(err.Error())
 	for _, s := range []string{
 		"no such host",

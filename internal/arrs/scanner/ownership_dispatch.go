@@ -286,18 +286,13 @@ func (m *Manager) resolveLidarrOwnershipStatus(ctx context.Context, client *lida
 			return model.OwnershipOwned, 0
 		}
 	}
-	// The dead file is gone: look for a replacement within the same album.
-	// (oldFileID>0 already implies metadata!=nil; the guard makes that local.)
-	if metadata != nil && metadata.Album != nil && metadata.Album.Id > 0 {
-		if albumFiles, aerr := client.GetTrackFilesForAlbumContext(ctx, metadata.Album.Id); aerr == nil {
-			for _, tf := range albumFiles {
-				if tf.ID > 0 && tf.ID != oldFileID {
-					return model.OwnershipReplaced, tf.ID
-				}
-			}
-		}
-	}
-	// Artist owns the area but a replacement can't be confirmed: conservative keep.
+	// The dead file is gone from the artist. Unlike Radarr (one file per movie) or
+	// Readarr (one file per book), an album holds many tracks, so the album's
+	// track-file list cannot prove which entry — if any — replaces THIS specific
+	// track: a sibling track is not a replacement. Track-level identity isn't
+	// available here either (metadata only carries the dead file id, which is gone),
+	// so we cannot safely return Replaced. Fall through to a conservative keep and
+	// let the arr drive the repair rather than risk misclassifying a sibling track.
 	return model.OwnershipOwned, 0
 }
 

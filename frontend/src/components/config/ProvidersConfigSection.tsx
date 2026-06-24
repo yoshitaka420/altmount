@@ -372,11 +372,12 @@ export function ProvidersConfigSection({
 											: "bg-success/10 text-success hover:bg-success/20"
 									}`}
 									onClick={() => handleToggleEnabled(provider)}
+									aria-label={provider.enabled ? "Disable provider" : "Enable provider"}
 								>
 									{provider.enabled ? (
-										<PowerOff className="h-4 w-4" />
+										<PowerOff className="h-4 w-4" aria-hidden="true" />
 									) : (
-										<Power className="h-4 w-4" />
+										<Power className="h-4 w-4" aria-hidden="true" />
 									)}
 								</button>
 							</div>
@@ -386,11 +387,12 @@ export function ProvidersConfigSection({
 									className="btn btn-sm join-item border-none bg-info/10 text-info hover:bg-info/20"
 									onClick={() => handleSpeedTest(provider)}
 									disabled={testingSpeedProviderId === provider.id || !provider.enabled}
+									aria-label="Run speed test"
 								>
 									{testingSpeedProviderId === provider.id ? (
 										<span className="loading loading-spinner loading-sm" />
 									) : (
-										<Gauge className="h-4 w-4" />
+										<Gauge className="h-4 w-4" aria-hidden="true" />
 									)}
 								</button>
 							</div>
@@ -401,11 +403,12 @@ export function ProvidersConfigSection({
 										className="btn btn-sm join-item border-none bg-warning/10 text-warning hover:bg-warning/20"
 										onClick={() => handleResetQuota(provider)}
 										disabled={resettingQuotaId === provider.id}
+										aria-label="Reset download quota"
 									>
 										{resettingQuotaId === provider.id ? (
 											<span className="loading loading-spinner loading-sm" />
 										) : (
-											<RotateCcw className="h-4 w-4" />
+											<RotateCcw className="h-4 w-4" aria-hidden="true" />
 										)}
 									</button>
 								</div>
@@ -415,8 +418,9 @@ export function ProvidersConfigSection({
 									type="button"
 									className="btn btn-sm join-item border-none bg-base-content/5 text-base-content hover:bg-base-content/10"
 									onClick={() => handleEdit(provider)}
+									aria-label="Edit provider"
 								>
-									<Edit className="h-4 w-4" />
+									<Edit className="h-4 w-4" aria-hidden="true" />
 								</button>
 							</div>
 							<div className="tooltip" data-tip="Remove provider">
@@ -425,11 +429,12 @@ export function ProvidersConfigSection({
 									className="btn btn-sm join-item border-none bg-error/10 text-error hover:bg-error/20"
 									onClick={() => handleDelete(provider.id)}
 									disabled={deletingProviderId === provider.id}
+									aria-label="Remove provider"
 								>
 									{deletingProviderId === provider.id ? (
 										<span className="loading loading-spinner loading-sm" />
 									) : (
-										<Trash2 className="h-4 w-4" />
+										<Trash2 className="h-4 w-4" aria-hidden="true" />
 									)}
 								</button>
 							</div>
@@ -585,10 +590,13 @@ export function ProvidersConfigSection({
 			{/* Global Provider User-Agent — one value applied to every provider above */}
 			<div className="space-y-3 border-base-200 border-t pt-6">
 				<div>
-					<h3 className="font-bold text-base-content text-lg tracking-tight">
+					<h3
+						id="global-user-agent-label"
+						className="font-bold text-base-content text-lg tracking-tight"
+					>
 						Provider User-Agent
 					</h3>
-					<p className="text-base-content/50 text-xs">
+					<p id="global-user-agent-desc" className="text-base-content/50 text-xs">
 						Sent to every NNTP provider above. Leave empty to disable.
 					</p>
 				</div>
@@ -598,6 +606,8 @@ export function ProvidersConfigSection({
 					value={globalUserAgent}
 					onChange={(e) => handleGlobalUserAgentChange(e.target.value)}
 					placeholder="e.g. SABnzbd/4.5.5"
+					aria-labelledby="global-user-agent-label"
+					aria-describedby="global-user-agent-desc"
 				/>
 			</div>
 

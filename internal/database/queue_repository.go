@@ -555,8 +555,12 @@ func (r *QueueRepository) UpdateQueueItemNzbPath(ctx context.Context, id int64, 
 }
 
 // UpdateQueueItemCategory updates the category and priority of a queue item.
+// The update is guarded on the pending state — the same condition the dedup flow
+// relies on when it first selects the row — so a worker that picked the item up
+// (moving it to processing/active) between the lookup and this write is never
+// silently re-categorized.
 func (r *QueueRepository) UpdateQueueItemCategory(ctx context.Context, id int64, category *string, priority QueuePriority) error {
-	query := `UPDATE import_queue SET category = ?, priority = ?, updated_at = datetime('now') WHERE id = ?`
+	query := `UPDATE import_queue SET category = ?, priority = ?, updated_at = datetime('now') WHERE id = ? AND status = 'pending'`
 	if _, err := r.db.ExecContext(ctx, query, category, priority, id); err != nil {
 		return fmt.Errorf("failed to update queue item category: %w", err)
 	}
@@ -564,8 +568,9 @@ func (r *QueueRepository) UpdateQueueItemCategory(ctx context.Context, id int64,
 }
 
 // GetPendingQueueItemsByPathPrefix returns pending queue items whose nzb_path starts with prefix.
+// priority is selected so callers can preserve the stored value when no override is supplied.
 func (r *QueueRepository) GetPendingQueueItemsByPathPrefix(ctx context.Context, prefix string) ([]*ImportQueueItem, error) {
-	query := `SELECT id, nzb_path FROM import_queue WHERE status = 'pending' AND nzb_path LIKE ? ESCAPE '\'`
+	query := `SELECT id, nzb_path, priority FROM import_queue WHERE status = 'pending' AND nzb_path LIKE ? ESCAPE '\'`
 	rows, err := r.db.QueryContext(ctx, query, escapeLikePattern(prefix)+"%")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query pending queue items by prefix: %w", err)
@@ -575,7 +580,7 @@ func (r *QueueRepository) GetPendingQueueItemsByPathPrefix(ctx context.Context, 
 	var items []*ImportQueueItem
 	for rows.Next() {
 		var it ImportQueueItem
-		if err := rows.Scan(&it.ID, &it.NzbPath); err != nil {
+		if err := rows.Scan(&it.ID, &it.NzbPath, &it.Priority); err != nil {
 			return nil, fmt.Errorf("failed to scan pending queue item: %w", err)
 		}
 		items = append(items, &it)
