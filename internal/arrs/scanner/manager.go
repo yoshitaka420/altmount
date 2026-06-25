@@ -739,6 +739,38 @@ func (m *Manager) triggerRadarrRescanByPath(ctx context.Context, client *radarr.
 	return nil
 }
 
+// parseSeasonEpisode extracts the season number and episode number(s) from a release
+// path such as ".../Show.S02E05.mkv" or a multi-episode ".../Show.S01E01E02.mkv". It
+// scans the provided paths in order (typically filePath then relativePath) and returns
+// ok=false when no SxxEyy token is present. Used by the Sonarr repair fallback to resolve
+// a renamed-but-still-owned episode by its stable season/episode number when path-based
+// matching fails.
+func parseSeasonEpisode(paths ...string) (season int, episodes []int, ok bool) {
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		m := seasonEpisodeCapture.FindStringSubmatch(p)
+		if m == nil {
+			continue
+		}
+		s, err := strconv.Atoi(m[1])
+		if err != nil {
+			continue
+		}
+		var eps []int
+		for _, em := range episodeNumCapture.FindAllStringSubmatch(m[2], -1) {
+			if e, err := strconv.Atoi(em[1]); err == nil {
+				eps = append(eps, e)
+			}
+		}
+		if len(eps) > 0 {
+			return s, eps, true
+		}
+	}
+	return 0, nil, false
+}
+
 // triggerSonarrRescanByPath triggers a rescan in Sonarr for the given file path
 func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.Sonarr, filePath, relativePath, instanceName string, metadata *model.WebhookMetadata) error {
 	slog.InfoContext(ctx, "Searching Sonarr for matching series",
@@ -961,6 +993,50 @@ func (m *Manager) triggerSonarrRescanByPath(ctx context.Context, client *sonarr.
 		}
 	}
 
+	// Fallback 3 (season + episode): the episode file was renamed (so both the path scan and
+	// the file-id match missed it) but the episode is still owned by Sonarr (HasFile=true).
+	// Without this, the repair dead-ends in ErrPathMatchFailed and the file is permanently
+	// condemned. Resolve the episode by its season+episode number parsed from the path and
+	// re-search it.
+	//
+	// DELETE-SAFETY GUARD: this fallback is BLOCKLIST-ONLY. It never deletes an episode file
+	// (it passes fileID=0 to blocklistSonarrEpisodeFile and only triggers an EpisodeSearch),
+	// so it can never destroy a healthy renamed/replacement file — Sonarr alone decides
+	// whether to replace the existing file when the re-search imports.
+	if len(episodeIDs) == 0 {
+		if season, epNums, ok := parseSeasonEpisode(filePath, relativePath); ok {
+			for _, ep := range episodes {
+				// Limit this fallback to renamed-but-OWNED episodes (HasFile=true), matching its
+				// documented intent. Without the guard it would also blocklist/re-search episodes
+				// Sonarr has no file for, which is broader than the renamed-file case this handles.
+				if ep == nil || !ep.HasFile || ep.SeasonNumber != season {
+					continue
+				}
+				for _, en := range epNums {
+					if ep.EpisodeNumber == en {
+						episodeIDs = append(episodeIDs, ep.ID)
+						break
+					}
+				}
+			}
+
+			if len(episodeIDs) > 0 {
+				slog.InfoContext(ctx, "Sonarr season+episode fallback resolved a renamed-but-owned episode; blocklisting release and re-searching (no file delete)",
+					"instance", instanceName,
+					"series", targetSeriesTitle,
+					"season", season,
+					"episodes", epNums,
+					"episode_ids", episodeIDs)
+
+				// Blocklist-only: fileID=0 means we blocklist the bad release without deleting
+				// any episode file. The guard above guarantees no healthy file is removed here.
+				if err := m.blocklistSonarrEpisodeFile(ctx, client, targetSeriesID, 0, episodeIDs, sceneName); err != nil {
+					slog.WarnContext(ctx, "Failed to blocklist Sonarr release in season+episode fallback", "error", err)
+				}
+			}
+		}
+	}
+
 	if len(episodeIDs) == 0 {
 		return fmt.Errorf("no episodes found for file in library or queue: %s: %w", filePath, model.ErrPathMatchFailed)
 	}
@@ -1136,13 +1212,19 @@ func (m *Manager) blocklistSonarrEpisodeFile(ctx context.Context, client *sonarr
 		return fmt.Errorf("failed to fetch Sonarr history: %w", err)
 	}
 
+	// fileID == 0 is the "episode-only" sentinel used by the blocklist-only callers (the
+	// metadata-episode and season+episode fallbacks): there is no specific file to match on,
+	// so the file-based comparison must be skipped entirely and the import event resolved by
+	// EpisodeID. Otherwise "0" could match a record whose data carries a zero/missing fileId
+	// and the wrong release would win.
+	hasFileID := fileID != 0
 	targetFileID := strconv.FormatInt(fileID, 10)
 	var downloadID string
 
 	// 1. Find the import event to get the downloadId
 	for _, record := range history.Records {
 		if record.EventType == "downloadFolderImported" {
-			if record.Data.FileID == targetFileID {
+			if hasFileID && record.Data.FileID == targetFileID {
 				downloadID = record.DownloadID
 				break
 			}
