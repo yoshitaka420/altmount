@@ -193,13 +193,44 @@ func (hc *HealthChecker) checkSingleFile(ctx context.Context, filePath string, i
 	}
 
 	if result.MissingCount > 0 {
-		event.Type = EventTypeFileCorrupted
-		event.Status = database.HealthStatusCorrupted
-		event.Error = fmt.Errorf("missing %d segments", result.MissingCount)
-		return event
+		// Honor the configured acceptable-missing-segments tolerance. A small number of
+		// missing segments can be transient or recoverable and should not condemn an
+		// otherwise-healthy file. Only mark the file corrupted when the missing ratio
+		// exceeds the threshold (default 0 = no missing segments allowed, preserving the
+		// previous behavior). This is the backend reader for acceptable_missing_segments_percentage.
+		//
+		// Basis (intentional): missingPct is computed over the SAMPLED subset
+		// (result.TotalChecked = the segments actually validated), NOT over the file's full
+		// segment count. When sampling < 100% (GetSegmentSamplePercentage), the subset is a
+		// representative random sample, so MissingCount/TotalChecked is an unbiased estimate of
+		// the whole-file missing ratio — which is the statistically correct quantity to compare
+		// against the tolerance. A full check (check_all_segments or ForceFullCheck => 100%
+		// sampling) makes TotalChecked equal the total segment count, so the ratio is exact.
+		// Dividing the subset's MissingCount by the full segment count instead would understate
+		// the true ratio and let genuinely corrupt files slip past the tolerance.
+		acceptablePct := cfg.GetAcceptableMissingSegmentsPercentage()
+		missingPct := 0.0
+		if result.TotalChecked > 0 {
+			missingPct = float64(result.MissingCount) / float64(result.TotalChecked) * 100
+		}
+
+		if missingPct > acceptablePct {
+			event.Type = EventTypeFileCorrupted
+			event.Status = database.HealthStatusCorrupted
+			event.Error = fmt.Errorf("missing %d of %d checked segments (%.2f%% exceeds acceptable %.2f%%)",
+				result.MissingCount, result.TotalChecked, missingPct, acceptablePct)
+			return event
+		}
+
+		slog.InfoContext(ctx, "Missing segments within acceptable tolerance, treating file as healthy",
+			"file_path", filePath,
+			"missing_count", result.MissingCount,
+			"total_checked", result.TotalChecked,
+			"missing_percentage", missingPct,
+			"acceptable_percentage", acceptablePct)
 	}
 
-	// All checked segments are available - record will be deleted
+	// All checked segments are available (or within the acceptable tolerance) - record will be deleted
 	event.Type = EventTypeFileHealthy
 	// Status not needed as the record will be deleted from database
 
