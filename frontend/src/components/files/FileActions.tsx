@@ -9,6 +9,8 @@ import {
 	Scissors,
 	Trash2,
 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useConfirm } from "../../contexts/ModalContext";
 import type { WebDAVFile } from "../../types/webdav";
 import { getFileTypeInfo } from "../../utils/fileUtils";
@@ -52,13 +54,70 @@ export function FileActions({
 		? `${currentPath}/${file.basename}`.replace(/\/+/g, "/")
 		: file.filename;
 	const { confirmDelete } = useConfirm();
+	const buttonRef = useRef<HTMLButtonElement | null>(null);
+	const menuRef = useRef<HTMLUListElement | null>(null);
+	const [isOpen, setIsOpen] = useState(false);
+	const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
 
-	const blurMenu = () => {
-		// DaisyUI dropdowns stay open on click; blur the focused element to close it.
-		if (document.activeElement instanceof HTMLElement) {
-			document.activeElement.blur();
+	const closeMenu = useCallback(() => setIsOpen(false), []);
+
+	const updateMenuPosition = useCallback(() => {
+		const button = buttonRef.current;
+		if (!button) {
+			return;
 		}
-	};
+
+		const rect = button.getBoundingClientRect();
+		const menuWidth = menuRef.current?.offsetWidth ?? 192;
+		const menuHeight = menuRef.current?.offsetHeight ?? 256;
+		const gap = 8;
+		const left = Math.min(
+			Math.max(gap, rect.right - menuWidth),
+			window.innerWidth - menuWidth - gap,
+		);
+		const belowTop = rect.bottom + gap;
+		const aboveTop = rect.top - menuHeight - gap;
+		const top =
+			belowTop + menuHeight <= window.innerHeight - gap ? belowTop : Math.max(gap, aboveTop);
+
+		setMenuPosition({ top, left });
+	}, []);
+
+	useEffect(() => {
+		if (!isOpen) {
+			return;
+		}
+
+		const handlePointerDown = (event: PointerEvent) => {
+			const target = event.target;
+			if (!(target instanceof Node)) {
+				return;
+			}
+			if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) {
+				return;
+			}
+			closeMenu();
+		};
+
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Escape") {
+				closeMenu();
+			}
+		};
+
+		updateMenuPosition();
+		window.addEventListener("resize", updateMenuPosition);
+		window.addEventListener("scroll", updateMenuPosition, true);
+		document.addEventListener("pointerdown", handlePointerDown);
+		document.addEventListener("keydown", handleKeyDown);
+
+		return () => {
+			window.removeEventListener("resize", updateMenuPosition);
+			window.removeEventListener("scroll", updateMenuPosition, true);
+			document.removeEventListener("pointerdown", handlePointerDown);
+			document.removeEventListener("keydown", handleKeyDown);
+		};
+	}, [closeMenu, isOpen, updateMenuPosition]);
 
 	const handleDownload = () => {
 		if (file.type === "file") {
@@ -107,131 +166,146 @@ export function FileActions({
 	const canPreview = file.type === "file" && fileInfo.isPreviewable && onPreview;
 
 	return (
-		<div className="dropdown dropdown-end">
+		<div className="relative">
 			<button
-				tabIndex={0}
+				ref={buttonRef}
 				type="button"
 				className="btn btn-ghost btn-sm btn-square"
 				aria-label="Item actions"
+				aria-haspopup="menu"
+				aria-expanded={isOpen}
 				disabled={isDownloading || isDeleting}
+				onClick={() => {
+					updateMenuPosition();
+					setIsOpen((open) => !open);
+				}}
 			>
 				<MoreVertical className="h-4 w-4" />
 			</button>
-			<ul className="dropdown-content menu z-10 w-48 rounded-box bg-base-100 shadow-lg">
-				{onRename && (
-					<li>
-						<button
-							type="button"
-							onClick={() => {
-								blurMenu();
-								handleRename();
-							}}
+			{isOpen && typeof document !== "undefined"
+				? createPortal(
+						<ul
+							ref={menuRef}
+							className="menu fixed z-[1000] w-48 rounded-box border border-base-300/80 bg-base-100 shadow-2xl"
+							style={{ top: menuPosition.top, left: menuPosition.left }}
 						>
-							<Pencil className="h-4 w-4" />
-							Rename
-						</button>
-					</li>
-				)}
-				{onCut && (
-					<li>
-						<button
-							type="button"
-							onClick={() => {
-								blurMenu();
-								handleCut();
-							}}
-						>
-							<Scissors className="h-4 w-4" />
-							{isCut ? "Cut (selected)" : "Cut"}
-						</button>
-					</li>
-				)}
-				<li>
-					<button
-						type="button"
-						onClick={() => {
-							blurMenu();
-							handleInfo();
-						}}
-					>
-						<Info className="h-4 w-4" />
-						File Info
-					</button>
-				</li>
-				{canPreview && (
-					<li>
-						<button
-							type="button"
-							onClick={() => {
-								blurMenu();
-								handlePreview();
-							}}
-						>
-							<Eye className="h-4 w-4" />
-							Preview
-						</button>
-					</li>
-				)}
-				{file.type === "file" && (
-					<li>
-						<button
-							type="button"
-							onClick={() => {
-								blurMenu();
-								handleDownload();
-							}}
-							disabled={isDownloading}
-						>
-							<Download className="h-4 w-4" />
-							{isDownloading ? "Downloading..." : "Download"}
-						</button>
-					</li>
-				)}
-				{file.type === "file" && onExportNZB && (
-					<li>
-						<button
-							type="button"
-							onClick={() => {
-								blurMenu();
-								handleExportNZB();
-							}}
-							disabled={isExportingNZB}
-						>
-							<FileDown className="h-4 w-4" />
-							{isExportingNZB ? "Exporting..." : "Export as NZB"}
-						</button>
-					</li>
-				)}
-				{file.type === "file" && onRegenerateSymlink && (
-					<li>
-						<button
-							type="button"
-							onClick={() => {
-								blurMenu();
-								handleRegenerateSymlink();
-							}}
-							disabled={isRegenerateSymlinkPending}
-						>
-							<Link2 className="h-4 w-4 text-primary" />
-							{isRegenerateSymlinkPending ? "Regenerating..." : "Regenerate Symlink"}
-						</button>
-					</li>
-				)}
-				<li>
-					<button
-						type="button"
-						onClick={() => {
-							blurMenu();
-							handleDelete();
-						}}
-						disabled={isDeleting}
-						className="text-error"
-					>
-						<Trash2 className="h-4 w-4" />
-						{isDeleting ? "Deleting..." : "Delete"}
-					</button>
-				</li>
-			</ul>
+							{onRename && (
+								<li>
+									<button
+										type="button"
+										onClick={() => {
+											closeMenu();
+											handleRename();
+										}}
+									>
+										<Pencil className="h-4 w-4" />
+										Rename
+									</button>
+								</li>
+							)}
+							{onCut && (
+								<li>
+									<button
+										type="button"
+										onClick={() => {
+											closeMenu();
+											handleCut();
+										}}
+									>
+										<Scissors className="h-4 w-4" />
+										{isCut ? "Cut (selected)" : "Cut"}
+									</button>
+								</li>
+							)}
+							<li>
+								<button
+									type="button"
+									onClick={() => {
+										closeMenu();
+										handleInfo();
+									}}
+								>
+									<Info className="h-4 w-4" />
+									File Info
+								</button>
+							</li>
+							{canPreview && (
+								<li>
+									<button
+										type="button"
+										onClick={() => {
+											closeMenu();
+											handlePreview();
+										}}
+									>
+										<Eye className="h-4 w-4" />
+										Preview
+									</button>
+								</li>
+							)}
+							{file.type === "file" && (
+								<li>
+									<button
+										type="button"
+										onClick={() => {
+											closeMenu();
+											handleDownload();
+										}}
+										disabled={isDownloading}
+									>
+										<Download className="h-4 w-4" />
+										{isDownloading ? "Downloading..." : "Download"}
+									</button>
+								</li>
+							)}
+							{file.type === "file" && onExportNZB && (
+								<li>
+									<button
+										type="button"
+										onClick={() => {
+											closeMenu();
+											handleExportNZB();
+										}}
+										disabled={isExportingNZB}
+									>
+										<FileDown className="h-4 w-4" />
+										{isExportingNZB ? "Exporting..." : "Export as NZB"}
+									</button>
+								</li>
+							)}
+							{file.type === "file" && onRegenerateSymlink && (
+								<li>
+									<button
+										type="button"
+										onClick={() => {
+											closeMenu();
+											handleRegenerateSymlink();
+										}}
+										disabled={isRegenerateSymlinkPending}
+									>
+										<Link2 className="h-4 w-4 text-primary" />
+										{isRegenerateSymlinkPending ? "Regenerating..." : "Regenerate Symlink"}
+									</button>
+								</li>
+							)}
+							<li>
+								<button
+									type="button"
+									onClick={() => {
+										closeMenu();
+										handleDelete();
+									}}
+									disabled={isDeleting}
+									className="text-error"
+								>
+									<Trash2 className="h-4 w-4" />
+									{isDeleting ? "Deleting..." : "Delete"}
+								</button>
+							</li>
+						</ul>,
+						document.body,
+					)
+				: null}
 		</div>
 	);
 }
