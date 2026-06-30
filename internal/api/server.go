@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"runtime"
 	"strings"
@@ -71,6 +72,8 @@ type Server struct {
 
 	// streamChecker verifies NZB segment availability for POST /api/nzb/check.
 	streamChecker *streamcheck.Checker
+	wardenStore   *streamcheck.WardenStore
+	wardenRemote  *streamcheck.WardenRemoteSourceService
 
 	speedtest     *speedtestCoordinator
 	speedtestOnce sync.Once
@@ -125,9 +128,17 @@ func NewServer(
 		updater:             updater.Default(),
 	}
 
-	// On-demand NZB availability checker (POST /api/nzb/check). configManager.GetConfig
-	// satisfies config.ConfigGetter, so live config changes apply per request.
-	server.streamChecker = streamcheck.NewChecker(poolManager, configManager.GetConfig)
+	if configManager != nil {
+		wardenStore, err := streamcheck.NewWardenStore(configManager.GetConfig)
+		if err != nil {
+			slog.Warn("Failed to initialize stream-check Warden store", "error", err)
+		} else {
+			server.wardenStore = wardenStore
+			server.wardenRemote = streamcheck.NewWardenRemoteSourceService(wardenStore)
+			server.wardenRemote.Start(context.Background())
+		}
+	}
+	server.streamChecker = streamcheck.NewChecker(poolManager, configManager.GetConfig, streamcheck.WithWarden(server.wardenStore))
 
 	// Wire stream-activity ↔ pool admission. Streams notify the pool when they
 	// start/stop; the pool reads the active stream count to pick its
@@ -239,6 +250,17 @@ func (s *Server) SetupRoutes(app *fiber.App) {
 			api.Use(auth.RequireAuthWithSkip(tokenService, s.userRepo, skipPaths))
 		}
 	}
+
+	api.Get("/get-warden", s.handleGetWarden)
+	api.Get("/warden-sources", s.handleWardenSources)
+	api.Post("/warden-import", s.handleWardenImport)
+	api.Get("/warden-export", s.handleWardenExport)
+	api.Post("/warden-source-add", s.handleWardenSourceAdd)
+	api.Post("/warden-source-update", s.handleWardenSourceUpdate)
+	api.Post("/warden-source-remove", s.handleWardenSourceRemove)
+	api.Post("/warden-source-refresh", s.handleWardenSourceRefresh)
+	api.Post("/warden-sources-import", s.handleWardenSourcesImport)
+	api.Get("/warden-sources-export", s.handleWardenSourcesExport)
 
 	// NZBDav Imports (now protected by JWT auth)
 	api.Post("/import/nzbdav", s.handleImportNzbdav)

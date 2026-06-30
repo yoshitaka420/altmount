@@ -201,7 +201,17 @@ type StreamCheckConfig struct {
 	// Defaults to 30.
 	CacheTTLMinutes int `yaml:"cache_ttl_minutes" mapstructure:"cache_ttl_minutes" json:"cache_ttl_minutes,omitempty"`
 	// MaxBatch caps how many NZBs a single request may check. Defaults to 50.
-	MaxBatch int `yaml:"max_batch" mapstructure:"max_batch" json:"max_batch,omitempty"`
+	MaxBatch int                     `yaml:"max_batch" mapstructure:"max_batch" json:"max_batch,omitempty"`
+	Warden   StreamCheckWardenConfig `yaml:"warden" mapstructure:"warden" json:"warden"`
+}
+
+type StreamCheckWardenConfig struct {
+	Enabled          *bool  `yaml:"enabled" mapstructure:"enabled" json:"enabled"`
+	DBPath           string `yaml:"db_path" mapstructure:"db_path" json:"db_path,omitempty"`
+	Quorum           int    `yaml:"quorum" mapstructure:"quorum" json:"quorum,omitempty"`
+	MaxSourceEntries int    `yaml:"max_source_entries" mapstructure:"max_source_entries" json:"max_source_entries,omitempty"`
+	BackboneScope    *bool  `yaml:"backbone_scope" mapstructure:"backbone_scope" json:"backbone_scope"`
+	MarkDead         *bool  `yaml:"mark_dead" mapstructure:"mark_dead" json:"mark_dead"`
 }
 
 // AuthConfig represents authentication configuration
@@ -668,6 +678,12 @@ func (c *Config) Validate() error {
 
 	if c.Streaming.MaxPrefetch <= 0 {
 		c.Streaming.MaxPrefetch = 60 // Default to 60 segments prefetched ahead if not set
+	}
+	if c.StreamCheck.Warden.Quorum <= 0 {
+		c.StreamCheck.Warden.Quorum = 2
+	}
+	if c.StreamCheck.Warden.MaxSourceEntries <= 0 {
+		c.StreamCheck.Warden.MaxSourceEntries = 2_000_000
 	}
 
 	if c.Import.MaxProcessorWorkers <= 0 {
@@ -1460,10 +1476,13 @@ func DefaultConfig(configDir ...string) *Config {
 	sabnzbdEnabled := false
 	scrapperEnabled := false
 	fuseEnabled := false
-	loginRequired := true           // Require login by default
-	stremioEnabled := false         // Stremio endpoint disabled by default
-	prowlarrEnabled := false        // Prowlarr integration disabled by default
-	streamCheckEnabled := false     // Stream Check endpoint disabled by default
+	loginRequired := true       // Require login by default
+	stremioEnabled := false     // Stremio endpoint disabled by default
+	prowlarrEnabled := false    // Prowlarr integration disabled by default
+	streamCheckEnabled := false // Stream Check endpoint disabled by default
+	streamCheckWardenEnabled := true
+	streamCheckWardenBackboneScope := true
+	streamCheckWardenMarkDead := true
 	watchIntervalSeconds := 10      // Default watch interval
 	failedItemRetentionHours := 24  // Default: auto-remove failed items after 24 hours
 	historyRetentionDays := 90      // Default: auto-remove import history after 90 days (3 months)
@@ -1526,6 +1545,13 @@ func DefaultConfig(configDir ...string) *Config {
 			AcceptableMissingPercentage: 0,
 			CacheTTLMinutes:             30,
 			MaxBatch:                    50,
+			Warden: StreamCheckWardenConfig{
+				Enabled:          &streamCheckWardenEnabled,
+				Quorum:           2,
+				MaxSourceEntries: 2_000_000,
+				BackboneScope:    &streamCheckWardenBackboneScope,
+				MarkDead:         &streamCheckWardenMarkDead,
+			},
 		},
 		Auth: AuthConfig{
 			LoginRequired: &loginRequired,

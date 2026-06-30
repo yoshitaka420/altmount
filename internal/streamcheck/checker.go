@@ -40,11 +40,13 @@ const (
 
 // Result holds the outcome of a single NZB availability check.
 type Result struct {
-	Verdict    Verdict `json:"verdict"`
-	Checked    int     `json:"checked"`
-	Missing    int     `json:"missing"`
-	MissingPct float64 `json:"missing_pct"`
-	Cached     bool    `json:"cached"`
+	Verdict       Verdict `json:"verdict"`
+	Checked       int     `json:"checked"`
+	Missing       int     `json:"missing"`
+	MissingPct    float64 `json:"missing_pct"`
+	Cached        bool    `json:"cached"`
+	Fingerprint   string  `json:"fingerprint,omitempty"`
+	WardenBlocked bool    `json:"warden_blocked,omitempty"`
 }
 
 // Checker verifies NZB segment availability against the Usenet connection pool.
@@ -52,16 +54,29 @@ type Checker struct {
 	poolManager  pool.Manager
 	configGetter config.ConfigGetter
 	cache        *verdictCache
+	warden       *WardenStore
+}
+
+type Option func(*Checker)
+
+func WithWarden(store *WardenStore) Option {
+	return func(ck *Checker) {
+		ck.warden = store
+	}
 }
 
 // NewChecker creates a Checker. configGetter is read on every call so live
 // configuration changes (sampling, timeout, threshold) take effect immediately.
-func NewChecker(poolManager pool.Manager, configGetter config.ConfigGetter) *Checker {
-	return &Checker{
+func NewChecker(poolManager pool.Manager, configGetter config.ConfigGetter, opts ...Option) *Checker {
+	ck := &Checker{
 		poolManager:  poolManager,
 		configGetter: configGetter,
 		cache:        newVerdictCache(),
 	}
+	for _, opt := range opts {
+		opt(ck)
+	}
+	return ck
 }
 
 // Check parses nzbData in memory and samples segment availability via NNTP STAT.
@@ -69,6 +84,10 @@ func NewChecker(poolManager pool.Manager, configGetter config.ConfigGetter) *Che
 // an unavailable pool or STAT infrastructure error returns VerdictUnknown with a
 // non-nil error so callers can fail open.
 func (ck *Checker) Check(ctx context.Context, nzbData []byte) (Result, error) {
+	return ck.CheckWithIdentity(ctx, nzbData, Identity{})
+}
+
+func (ck *Checker) CheckWithIdentity(ctx context.Context, nzbData []byte, identity Identity) (Result, error) {
 	cfg := ck.configGetter()
 
 	parsed, err := nzbparser.Parse(bytes.NewReader(nzbData))
@@ -82,11 +101,17 @@ func (ck *Checker) Check(ctx context.Context, nzbData []byte) (Result, error) {
 		return Result{Verdict: VerdictDead}, nil
 	}
 
+	wardenFP := WardenFingerprintFromNZB(parsed, identity)
+	if wardenFP != "" && ck.warden != nil && cfg.GetStreamCheckWardenEnabled() && ck.warden.IsDeadAnywhere(ctx, wardenFP) {
+		return Result{Verdict: VerdictDead, Fingerprint: wardenFP, WardenBlocked: true}, nil
+	}
+
 	fp := fingerprint(segments)
 	ttl := cfg.GetStreamCheckCacheTTL()
 	if ttl > 0 {
 		if cached, ok := ck.cache.get(fp); ok {
 			cached.Cached = true
+			cached.Fingerprint = wardenFP
 			return cached, nil
 		}
 	}
@@ -124,6 +149,11 @@ func (ck *Checker) Check(ctx context.Context, nzbData []byte) (Result, error) {
 		result.Verdict = VerdictDegraded
 	default:
 		result.Verdict = VerdictDead
+	}
+	result.Fingerprint = wardenFP
+
+	if result.Verdict == VerdictDead && wardenFP != "" && ck.warden != nil && cfg.GetStreamCheckWardenEnabled() && cfg.GetStreamCheckWardenMarkDead() {
+		_ = ck.warden.MarkDead(ctx, wardenFP)
 	}
 
 	if ttl > 0 {

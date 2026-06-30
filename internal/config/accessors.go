@@ -134,6 +134,36 @@ func (c *Config) GetStreamCheckMaxBatch() int {
 	return c.StreamCheck.MaxBatch
 }
 
+func (c *Config) GetStreamCheckWardenEnabled() bool {
+	return c.StreamCheck.Warden.Enabled == nil || *c.StreamCheck.Warden.Enabled
+}
+
+func (c *Config) GetStreamCheckWardenDBPath() string {
+	return c.StreamCheck.Warden.DBPath
+}
+
+func (c *Config) GetStreamCheckWardenQuorum() int {
+	if c.StreamCheck.Warden.Quorum <= 0 {
+		return 2
+	}
+	return c.StreamCheck.Warden.Quorum
+}
+
+func (c *Config) GetStreamCheckWardenMaxSourceEntries() int {
+	if c.StreamCheck.Warden.MaxSourceEntries <= 0 {
+		return 2_000_000
+	}
+	return c.StreamCheck.Warden.MaxSourceEntries
+}
+
+func (c *Config) GetStreamCheckWardenBackboneScopeEnabled() bool {
+	return c.StreamCheck.Warden.BackboneScope == nil || *c.StreamCheck.Warden.BackboneScope
+}
+
+func (c *Config) GetStreamCheckWardenMarkDead() bool {
+	return c.StreamCheck.Warden.MarkDead == nil || *c.StreamCheck.Warden.MarkDead
+}
+
 // GetMaxRetries returns the maximum number of health check retries.
 func (c *Config) GetMaxRetries() int {
 	if c.Health.MaxRetries <= 0 {

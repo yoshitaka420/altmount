@@ -30,7 +30,11 @@ type StreamCheckItem struct {
 	// caller can correlate verdicts with its own candidate list.
 	ID string `json:"id"`
 	// NzbURL is the URL the NZB is downloaded from for verification.
-	NzbURL string `json:"nzb_url"`
+	NzbURL     string `json:"nzb_url"`
+	Size       int64  `json:"size,omitempty"`
+	Poster     string `json:"poster,omitempty"`
+	UsenetDate int64  `json:"usenet_date,omitempty"`
+	Date       int64  `json:"date,omitempty"`
 }
 
 // StreamCheckRequest is the body of POST /api/nzb/check.
@@ -38,18 +42,24 @@ type StreamCheckRequest struct {
 	// Items is the batch of NZBs to verify.
 	Items []StreamCheckItem `json:"items"`
 	// NzbURL is a convenience single-item form, used when Items is empty.
-	NzbURL string `json:"nzb_url"`
+	NzbURL     string `json:"nzb_url"`
+	Size       int64  `json:"size,omitempty"`
+	Poster     string `json:"poster,omitempty"`
+	UsenetDate int64  `json:"usenet_date,omitempty"`
+	Date       int64  `json:"date,omitempty"`
 }
 
 // StreamCheckItemResult is the verdict for one requested NZB.
 type StreamCheckItemResult struct {
-	ID         string              `json:"id"`
-	Verdict    streamcheck.Verdict `json:"verdict"`
-	Checked    int                 `json:"checked"`
-	Missing    int                 `json:"missing"`
-	MissingPct float64             `json:"missing_pct"`
-	Cached     bool                `json:"cached"`
-	Error      string              `json:"error,omitempty"`
+	ID            string              `json:"id"`
+	Verdict       streamcheck.Verdict `json:"verdict"`
+	Checked       int                 `json:"checked"`
+	Missing       int                 `json:"missing"`
+	MissingPct    float64             `json:"missing_pct"`
+	Cached        bool                `json:"cached"`
+	Fingerprint   string              `json:"fingerprint,omitempty"`
+	WardenBlocked bool                `json:"warden_blocked,omitempty"`
+	Error         string              `json:"error,omitempty"`
 }
 
 // StreamCheckResponse is the response of POST /api/nzb/check.
@@ -113,7 +123,14 @@ func (s *Server) handleNzbCheck(c *fiber.Ctx) error {
 
 	items := req.Items
 	if len(items) == 0 && req.NzbURL != "" {
-		items = []StreamCheckItem{{ID: req.NzbURL, NzbURL: req.NzbURL}}
+		items = []StreamCheckItem{{
+			ID:         req.NzbURL,
+			NzbURL:     req.NzbURL,
+			Size:       req.Size,
+			Poster:     req.Poster,
+			UsenetDate: req.UsenetDate,
+			Date:       req.Date,
+		}}
 	}
 	if len(items) == 0 {
 		return RespondBadRequest(c, "No items to check", "Provide items[] or nzb_url")
@@ -150,12 +167,14 @@ func (s *Server) handleNzbCheck(c *fiber.Ctx) error {
 				return
 			}
 
-			res, err := s.streamChecker.Check(ctx, nzbData)
+			res, err := s.streamChecker.CheckWithIdentity(ctx, nzbData, item.identity())
 			out.Verdict = res.Verdict
 			out.Checked = res.Checked
 			out.Missing = res.Missing
 			out.MissingPct = res.MissingPct
 			out.Cached = res.Cached
+			out.Fingerprint = res.Fingerprint
+			out.WardenBlocked = res.WardenBlocked
 			if err != nil {
 				out.Error = err.Error()
 			}
@@ -165,6 +184,18 @@ func (s *Server) handleNzbCheck(c *fiber.Ctx) error {
 	wg.Wait()
 
 	return RespondSuccess(c, StreamCheckResponse{Results: results})
+}
+
+func (item StreamCheckItem) identity() streamcheck.Identity {
+	date := item.UsenetDate
+	if date == 0 {
+		date = item.Date
+	}
+	return streamcheck.Identity{
+		Size:       item.Size,
+		Poster:     item.Poster,
+		UsenetDate: date,
+	}
 }
 
 // fetchNzbForCheck downloads an NZB by URL with a bounded size and timeout.
