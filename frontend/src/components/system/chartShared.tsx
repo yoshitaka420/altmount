@@ -13,17 +13,45 @@ import {
 	YAxis,
 } from "recharts";
 
-// Multi-series palette sourced from the active daisyUI theme so chart colors
-// follow the selected theme instead of fixed hex values.
+// Fixed palette keeps provider series distinct in minimal themes.
 const CHART_COLORS = [
-	"var(--color-primary)",
-	"var(--color-success)",
-	"var(--color-warning)",
-	"var(--color-error)",
-	"var(--color-secondary)",
-	"var(--color-accent)",
-	"var(--color-info)",
+	"#60a5fa",
+	"#f87171",
+	"#34d399",
+	"#fbbf24",
+	"#a78bfa",
+	"#fb923c",
+	"#22d3ee",
+	"#f472b6",
+	"#a3e635",
+	"#c084fc",
+	"#2dd4bf",
+	"#facc15",
+	"#818cf8",
+	"#4ade80",
+	"#e879f9",
+	"#38bdf8",
+	"#fdba74",
+	"#fca5a5",
 ];
+
+function chartColorAt(index: number) {
+	if (index < CHART_COLORS.length) return CHART_COLORS[index];
+
+	const hue = Math.round((index * 137.508) % 360);
+	const lightness = index % 2 === 0 ? 62 : 72;
+	return `hsl(${hue}, 72%, ${lightness}%)`;
+}
+
+// Stable host ordering keeps colors consistent across charts.
+export function buildProviderColorMap(hosts: string[]): Record<string, string> {
+	const unique = [...new Set(hosts)].sort((a, b) => a.localeCompare(b));
+	const map: Record<string, string> = {};
+	unique.forEach((host, i) => {
+		map[host] = chartColorAt(i);
+	});
+	return map;
+}
 
 export type ChartDatum = Record<string, string | number>;
 
@@ -84,10 +112,6 @@ function CustomTooltip({
 	);
 }
 
-/**
- * Keeps an active/inactive toggle map in sync with the available providers,
- * defaulting newly seen providers to active.
- */
 function useActiveProviders(providers: string[]) {
 	const [activeProviders, setActiveProviders] = useState<Record<string, boolean>>({});
 
@@ -144,29 +168,22 @@ function TimeRangeTabs({ tabs, value, onChange, activeClassName }: TimeRangeTabs
 }
 
 interface ProviderAreaChartProps {
-	/** Icon shown next to the title. */
 	icon: LucideIcon;
 	iconClassName: string;
 	title: string;
 	subtitle: ReactNode;
-	/** Time-range tabs configuration. */
 	tabs: TimeRangeTab[];
 	days: number;
 	onDaysChange: (value: number) => void;
 	tabActiveClassName: string;
-	/** Chart data rows, each keyed by provider host. */
 	chartData: ChartDatum[];
-	/** Providers sorted by magnitude (controls color + draw order). */
 	providers: string[];
-	/** Unique prefix for the gradient ids (avoids collisions between charts). */
+	colorMap: Record<string, string>;
 	gradientPrefix: string;
-	/** Tooltip value formatter. */
 	formatValue: (value: number) => string;
 	tooltipTotalClassName: string;
-	/** Tailwind class for the tooltip total accent (passed through to CustomTooltip). */
 	yAxisTickFormatter?: (value: number) => string;
 	yAxisUnit?: string;
-	/** Connect area segments across null gaps (used by the speed chart). */
 	connectNulls?: boolean;
 }
 
@@ -181,6 +198,7 @@ export function ProviderAreaChart({
 	tabActiveClassName,
 	chartData,
 	providers,
+	colorMap,
 	gradientPrefix,
 	formatValue,
 	tooltipTotalClassName,
@@ -202,7 +220,6 @@ export function ProviderAreaChart({
 						<p className="mt-0.5 text-base-content/60 text-xs">{subtitle}</p>
 					</div>
 
-					{/* Premium Segmented Timeline Controller */}
 					<TimeRangeTabs
 						tabs={tabs}
 						value={days}
@@ -215,27 +232,22 @@ export function ProviderAreaChart({
 					<ResponsiveContainer width="100%" height="100%">
 						<AreaChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
 							<defs>
-								{providers.map((p, i) => (
-									<linearGradient
-										key={`${gradientPrefix}${p}`}
-										id={`${gradientPrefix}${p}`}
-										x1="0"
-										y1="0"
-										x2="0"
-										y2="1"
-									>
-										<stop
-											offset="5%"
-											stopColor={CHART_COLORS[i % CHART_COLORS.length]}
-											stopOpacity={0.45}
-										/>
-										<stop
-											offset="95%"
-											stopColor={CHART_COLORS[i % CHART_COLORS.length]}
-											stopOpacity={0.02}
-										/>
-									</linearGradient>
-								))}
+								{providers.map((p, i) => {
+									const color = colorMap[p] ?? chartColorAt(i);
+									return (
+										<linearGradient
+											key={`${gradientPrefix}${p}`}
+											id={`${gradientPrefix}${p}`}
+											x1="0"
+											y1="0"
+											x2="0"
+											y2="1"
+										>
+											<stop offset="5%" stopColor={color} stopOpacity={0.45} />
+											<stop offset="95%" stopColor={color} stopOpacity={0.02} />
+										</linearGradient>
+									);
+								})}
 							</defs>
 							<CartesianGrid strokeDasharray="3 3" opacity={0.04} vertical={false} />
 							<XAxis
@@ -261,9 +273,7 @@ export function ProviderAreaChart({
 									strokeWidth: 1,
 								}}
 								isAnimationActive={false}
-								// z-index must live on the recharts wrapper: it's positioned
-								// with transform (own stacking context), so the legend would
-								// otherwise paint over the tooltip and clip the Total row.
+								// Keep tooltip above the legend.
 								wrapperStyle={{ zIndex: 50 }}
 							/>
 							<Legend
@@ -278,7 +288,7 @@ export function ProviderAreaChart({
 										payload={providers.map<LegendPayload>((p, i) => ({
 											value: p,
 											type: "circle",
-											color: CHART_COLORS[i % CHART_COLORS.length],
+											color: colorMap[p] ?? chartColorAt(i),
 											dataKey: p,
 											inactive: !activeProviders[p],
 										}))}
@@ -299,7 +309,7 @@ export function ProviderAreaChart({
 							/>
 							{[...providers].reverse().map((p) => {
 								const i = providers.indexOf(p);
-								const color = CHART_COLORS[i % CHART_COLORS.length];
+								const color = colorMap[p] ?? chartColorAt(i);
 								return (
 									activeProviders[p] && (
 										<Area
