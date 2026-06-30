@@ -131,7 +131,7 @@ func NewServer(
 	if configManager != nil {
 		wardenStore, err := streamcheck.NewWardenStore(configManager.GetConfig)
 		if err != nil {
-			slog.Warn("Failed to initialize stream-check Warden store", "error", err)
+			slog.Warn("Failed to initialize stream-check Stream Blocklist store", "error", err)
 		} else {
 			server.wardenStore = wardenStore
 			server.wardenRemote = streamcheck.NewWardenRemoteSourceService(wardenStore)

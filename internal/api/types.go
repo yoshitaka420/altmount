@@ -469,26 +469,27 @@ func DefaultPagination() Pagination {
 // QueueItemResponse represents a queue item in API responses
 type QueueItemResponse struct {
 	ID             int64                  `json:"id"`
+	DownloadID     *string                `json:"download_id,omitempty"`
 	NzbPath        string                 `json:"nzb_path"`
 	NzbDisplayName string                 `json:"nzb_display_name"`
 	TargetPath     string                 `json:"target_path"`
-	Category     *string                `json:"category"`
-	Priority     database.QueuePriority `json:"priority"`
-	Status       database.QueueStatus   `json:"status"`
-	CreatedAt    time.Time              `json:"created_at"`
-	UpdatedAt    time.Time              `json:"updated_at"`
-	StartedAt    *time.Time             `json:"started_at"`
-	CompletedAt  *time.Time             `json:"completed_at"`
-	RetryCount   int                    `json:"retry_count"`
-	MaxRetries   int                    `json:"max_retries"`
-	ErrorMessage *string                `json:"error_message"`
-	BatchID      *string                `json:"batch_id"`
-	Metadata     *string                `json:"metadata"`
-	FileSize     *int64                 `json:"file_size"`
-	Indexer      *string                `json:"indexer,omitempty"`      // Indexer name
-	Percentage   *int                   `json:"percentage,omitempty"`    // Progress percentage (0-100), only for items being processed
-	Stage        string                 `json:"stage,omitempty"`         // Progress stage (e.g. "Validating segments")
-	StoragePath  *string                `json:"storage_path,omitempty"` // Internal FUSE mount path (populated after completion)
+	Category       *string                `json:"category"`
+	Priority       database.QueuePriority `json:"priority"`
+	Status         database.QueueStatus   `json:"status"`
+	CreatedAt      time.Time              `json:"created_at"`
+	UpdatedAt      time.Time              `json:"updated_at"`
+	StartedAt      *time.Time             `json:"started_at"`
+	CompletedAt    *time.Time             `json:"completed_at"`
+	RetryCount     int                    `json:"retry_count"`
+	MaxRetries     int                    `json:"max_retries"`
+	ErrorMessage   *string                `json:"error_message"`
+	BatchID        *string                `json:"batch_id"`
+	Metadata       *string                `json:"metadata"`
+	FileSize       *int64                 `json:"file_size"`
+	Indexer        *string                `json:"indexer,omitempty"`      // Indexer name
+	Percentage     *int                   `json:"percentage,omitempty"`   // Progress percentage (0-100), only for items being processed
+	Stage          string                 `json:"stage,omitempty"`        // Progress stage (e.g. "Validating segments")
+	StoragePath    *string                `json:"storage_path,omitempty"` // Internal FUSE mount path (populated after completion)
 }
 
 // QueueStatsResponse represents queue statistics in API responses
@@ -642,14 +643,14 @@ const (
 
 // UpdateStatusResponse represents the current update status.
 type UpdateStatusResponse struct {
-	CurrentVersion         string        `json:"current_version"`
-	GitCommit              string        `json:"git_commit,omitempty"`
-	Channel                UpdateChannel `json:"channel"`
-	LatestVersion          string        `json:"latest_version,omitempty"`
-	UpdateAvailable        bool          `json:"update_available"`
-	ReleaseURL             string        `json:"release_url,omitempty"`
-	DockerAvailable        bool          `json:"docker_available"`
-	BinaryUpdateAvailable  bool          `json:"binary_update_available"`
+	CurrentVersion        string        `json:"current_version"`
+	GitCommit             string        `json:"git_commit,omitempty"`
+	Channel               UpdateChannel `json:"channel"`
+	LatestVersion         string        `json:"latest_version,omitempty"`
+	UpdateAvailable       bool          `json:"update_available"`
+	ReleaseURL            string        `json:"release_url,omitempty"`
+	DockerAvailable       bool          `json:"docker_available"`
+	BinaryUpdateAvailable bool          `json:"binary_update_available"`
 }
 
 // SystemHealthResponse represents system health check result
@@ -723,24 +724,25 @@ func ToQueueItemResponse(item *database.ImportQueueItem) *QueueItemResponse {
 
 	return &QueueItemResponse{
 		ID:             item.ID,
+		DownloadID:     item.DownloadID,
 		NzbPath:        item.NzbPath,
 		NzbDisplayName: nzbDisplayName,
 		TargetPath:     targetPath,
-		Category:     item.Category,
-		Priority:     item.Priority,
-		Status:       item.Status,
-		CreatedAt:    item.CreatedAt,
-		UpdatedAt:    item.UpdatedAt,
-		StartedAt:    item.StartedAt,
-		CompletedAt:  item.CompletedAt,
-		RetryCount:   item.RetryCount,
-		MaxRetries:   item.MaxRetries,
-		ErrorMessage: &errorMessage,
-		BatchID:      item.BatchID,
-		Metadata:     item.Metadata,
-		FileSize:     item.FileSize,
-		StoragePath:  item.StoragePath,
-		Indexer:      item.Indexer,
+		Category:       item.Category,
+		Priority:       item.Priority,
+		Status:         item.Status,
+		CreatedAt:      item.CreatedAt,
+		UpdatedAt:      item.UpdatedAt,
+		StartedAt:      item.StartedAt,
+		CompletedAt:    item.CompletedAt,
+		RetryCount:     item.RetryCount,
+		MaxRetries:     item.MaxRetries,
+		ErrorMessage:   &errorMessage,
+		BatchID:        item.BatchID,
+		Metadata:       item.Metadata,
+		FileSize:       item.FileSize,
+		StoragePath:    item.StoragePath,
+		Indexer:        item.Indexer,
 	}
 }
 

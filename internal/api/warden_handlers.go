@@ -52,7 +52,7 @@ type wardenSourcesImportResponse struct {
 
 func (s *Server) requireWarden(c *fiber.Ctx) (*streamcheck.WardenStore, bool) {
 	if s.wardenStore == nil {
-		_ = RespondServiceUnavailable(c, "Warden store not available", "")
+		_ = RespondServiceUnavailable(c, "Stream Blocklist store not available", "")
 		return nil, false
 	}
 	return s.wardenStore, true
@@ -73,7 +73,7 @@ func (s *Server) handleWardenSources(c *fiber.Ctx) error {
 	}
 	sources, err := store.GetSources(c.Context())
 	if err != nil {
-		return RespondInternalError(c, "Failed to list Warden sources", err.Error())
+		return RespondInternalError(c, "Failed to list Stream Blocklist sources", err.Error())
 	}
 	cfg := s.configManager.GetConfig()
 	quorum := 2
@@ -98,7 +98,7 @@ func (s *Server) handleWardenImport(c *fiber.Ctx) error {
 	if c.FormValue("action") == "clear" {
 		removed, err := store.Clear(ctx)
 		if err != nil {
-			return RespondInternalError(c, "Failed to clear Warden list", err.Error())
+			return RespondInternalError(c, "Failed to clear Stream Blocklist", err.Error())
 		}
 		return RespondSuccess(c, wardenImportResponse{Added: 0, Total: store.Count(ctx), Cleared: removed})
 	}
@@ -108,11 +108,11 @@ func (s *Server) handleWardenImport(c *fiber.Ctx) error {
 	}
 	data, err := readUploadedFile(file, maxWardenUploadBytes)
 	if err != nil {
-		return RespondBadRequest(c, "Failed to read Warden import", err.Error())
+		return RespondBadRequest(c, "Failed to read Stream Blocklist import", err.Error())
 	}
 	body, err := decodeMaybeGzip(data, maxWardenUploadBytes)
 	if err != nil {
-		return RespondBadRequest(c, "Failed to decode Warden import", err.Error())
+		return RespondBadRequest(c, "Failed to decode Stream Blocklist import", err.Error())
 	}
 	if c.FormValue("target") == "separate" {
 		name := strings.TrimSpace(c.FormValue("name"))
@@ -122,15 +122,15 @@ func (s *Server) handleWardenImport(c *fiber.Ctx) error {
 		if name == "" {
 			name = "Imported list"
 		}
-		sourceID, count, err := store.ImportAsNewSource(ctx, bytes.NewReader(body), name, c.FormValue("trust"))
+		sourceID, count, err := store.ImportAsNewSource(ctx, bytes.NewReader(body), name, streamcheck.TrustFull)
 		if err != nil {
-			return RespondBadRequest(c, "Failed to import Warden source", err.Error())
+			return RespondBadRequest(c, "Failed to import Stream Blocklist source", err.Error())
 		}
 		return RespondSuccess(c, wardenImportResponse{Added: count, Total: store.Count(ctx), SourceID: sourceID})
 	}
 	before := store.LocalCount(ctx)
 	if _, err := store.MergeIntoLocal(ctx, bytes.NewReader(body)); err != nil {
-		return RespondBadRequest(c, "Failed to import Warden list", err.Error())
+		return RespondBadRequest(c, "Failed to import Stream Blocklist", err.Error())
 	}
 	after := store.LocalCount(ctx)
 	return RespondSuccess(c, wardenImportResponse{Added: max(0, after-before), Total: store.Count(ctx)})
@@ -148,7 +148,7 @@ func (s *Server) handleWardenExport(c *fiber.Ctx) error {
 		} else {
 			sources, err := store.GetSources(c.Context())
 			if err != nil {
-				return RespondInternalError(c, "Failed to list Warden sources", err.Error())
+				return RespondInternalError(c, "Failed to list Stream Blocklist sources", err.Error())
 			}
 			sourceIDs = sourceIDs[:0]
 			for _, source := range sources {
@@ -160,13 +160,13 @@ func (s *Server) handleWardenExport(c *fiber.Ctx) error {
 	gz := gzip.NewWriter(&out)
 	if err := store.ExportTo(c.Context(), gz, sourceIDs, c.Query("dedup") != "0"); err != nil {
 		_ = gz.Close()
-		return RespondInternalError(c, "Failed to export Warden list", err.Error())
+		return RespondInternalError(c, "Failed to export Stream Blocklist", err.Error())
 	}
 	if err := gz.Close(); err != nil {
-		return RespondInternalError(c, "Failed to finalize Warden export", err.Error())
+		return RespondInternalError(c, "Failed to finalize Stream Blocklist export", err.Error())
 	}
 	c.Set("Content-Type", "application/gzip")
-	c.Set("Content-Disposition", `attachment; filename="warden.ndjson.gz"`)
+	c.Set("Content-Disposition", `attachment; filename="stream-blocklist.ndjson.gz"`)
 	return c.Send(out.Bytes())
 }
 
@@ -185,9 +185,9 @@ func (s *Server) handleWardenSourceAdd(c *fiber.Ctx) error {
 		name = parsed.Host
 	}
 	refreshHours := parseIntDefault(c.FormValue("refreshHours"), 24)
-	sourceID, err := store.AddSource(c.Context(), "remote", name, rawURL, c.FormValue("trust"), refreshHours)
+	sourceID, err := store.AddSource(c.Context(), "remote", name, rawURL, streamcheck.TrustFull, refreshHours)
 	if err != nil {
-		return RespondInternalError(c, "Failed to add Warden source", err.Error())
+		return RespondInternalError(c, "Failed to add Stream Blocklist source", err.Error())
 	}
 	message := ""
 	if s.wardenRemote != nil {
@@ -216,11 +216,6 @@ func (s *Server) handleWardenSourceUpdate(c *fiber.Ctx) error {
 		v := c.FormValue("enabled") == "true" || c.FormValue("enabled") == "1"
 		enabled = &v
 	}
-	var trust *string
-	if hasFormKey(c, "trust") {
-		v := c.FormValue("trust")
-		trust = &v
-	}
 	var refreshHours *int
 	if hasFormKey(c, "refreshHours") {
 		v := parseIntDefault(c.FormValue("refreshHours"), 24)
@@ -231,8 +226,8 @@ func (s *Server) handleWardenSourceUpdate(c *fiber.Ctx) error {
 		v := c.FormValue("name")
 		name = &v
 	}
-	if err := store.UpdateSource(c.Context(), id, enabled, trust, refreshHours, name); err != nil {
-		return RespondInternalError(c, "Failed to update Warden source", err.Error())
+	if err := store.UpdateSource(c.Context(), id, enabled, nil, refreshHours, name); err != nil {
+		return RespondInternalError(c, "Failed to update Stream Blocklist source", err.Error())
 	}
 	return RespondSuccess(c, wardenSourceMutateResponse{SourceID: id})
 }
@@ -249,13 +244,13 @@ func (s *Server) handleWardenSourceRemove(c *fiber.Ctx) error {
 	if c.FormValue("action") == "clear" {
 		removed, err := store.ClearSource(c.Context(), id)
 		if err != nil {
-			return RespondInternalError(c, "Failed to clear Warden source", err.Error())
+			return RespondInternalError(c, "Failed to clear Stream Blocklist source", err.Error())
 		}
 		return RespondSuccess(c, wardenSourceMutateResponse{SourceID: id, Removed: removed})
 	}
 	removed, err := store.RemoveSource(c.Context(), id)
 	if err != nil {
-		return RespondInternalError(c, "Failed to remove Warden source", err.Error())
+		return RespondInternalError(c, "Failed to remove Stream Blocklist source", err.Error())
 	}
 	var count int64
 	if removed {
@@ -270,18 +265,18 @@ func (s *Server) handleWardenSourceRefresh(c *fiber.Ctx) error {
 		return nil
 	}
 	if s.wardenRemote == nil {
-		return RespondServiceUnavailable(c, "Warden remote source service not available", "")
+		return RespondServiceUnavailable(c, "Stream Blocklist remote source service not available", "")
 	}
 	id := strings.TrimSpace(c.FormValue("id"))
 	sources, err := store.GetSources(c.Context())
 	if err != nil {
-		return RespondInternalError(c, "Failed to list Warden sources", err.Error())
+		return RespondInternalError(c, "Failed to list Stream Blocklist sources", err.Error())
 	}
 	for _, source := range sources {
 		if source.ID == id {
 			message, err := s.wardenRemote.Refresh(c.Context(), source)
 			if err != nil {
-				return RespondBadRequest(c, "Failed to refresh Warden source", err.Error())
+				return RespondBadRequest(c, "Failed to refresh Stream Blocklist source", err.Error())
 			}
 			return RespondSuccess(c, wardenSourceMutateResponse{SourceID: id, Message: message})
 		}
@@ -294,10 +289,7 @@ func (s *Server) handleWardenSourcesImport(c *fiber.Ctx) error {
 	if !ok {
 		return nil
 	}
-	defaultTrust := c.FormValue("trust")
-	if strings.TrimSpace(defaultTrust) == "" {
-		defaultTrust = streamcheck.TrustCorroborate
-	}
+	defaultTrust := streamcheck.TrustFull
 	defaultRefresh := parseIntDefault(c.FormValue("refreshHours"), 24)
 	content := c.FormValue("text")
 	if file, err := firstFormFile(c); err == nil {
@@ -306,7 +298,7 @@ func (s *Server) handleWardenSourcesImport(c *fiber.Ctx) error {
 		}
 		data, err := readUploadedFile(file, maxWardenSourcesUploadByte)
 		if err != nil {
-			return RespondBadRequest(c, "Failed to read Warden sources import", err.Error())
+			return RespondBadRequest(c, "Failed to read Stream Blocklist sources import", err.Error())
 		}
 		content = string(data)
 	}
@@ -322,7 +314,7 @@ func (s *Server) handleWardenSourcesImport(c *fiber.Ctx) error {
 	}
 	added, skipped, err := store.ImportRemoteSources(c.Context(), specs)
 	if err != nil {
-		return RespondInternalError(c, "Failed to import Warden sources", err.Error())
+		return RespondInternalError(c, "Failed to import Stream Blocklist sources", err.Error())
 	}
 	if added > 0 && s.wardenRemote != nil {
 		go func() {
@@ -341,7 +333,7 @@ func (s *Server) handleWardenSourcesExport(c *fiber.Ctx) error {
 	}
 	sources, err := store.GetSources(c.Context())
 	if err != nil {
-		return RespondInternalError(c, "Failed to list Warden sources", err.Error())
+		return RespondInternalError(c, "Failed to list Stream Blocklist sources", err.Error())
 	}
 	type bundleItem struct {
 		URL          string `json:"url"`
@@ -365,7 +357,7 @@ func (s *Server) handleWardenSourcesExport(c *fiber.Ctx) error {
 	}
 	data, err := json.MarshalIndent(bundle, "", "  ")
 	if err != nil {
-		return RespondInternalError(c, "Failed to export Warden sources", err.Error())
+		return RespondInternalError(c, "Failed to export Stream Blocklist sources", err.Error())
 	}
 	c.Set("Content-Type", "application/json")
 	c.Set("Content-Disposition", `attachment; filename="bundle.json"`)
@@ -544,7 +536,7 @@ func remoteSourceSpec(rawURL, name, trust string, refreshHours int) (streamcheck
 	return streamcheck.RemoteSourceSpec{
 		URL:          rawURL,
 		Name:         strings.TrimSpace(name),
-		Trust:        trust,
+		Trust:        streamcheck.TrustFull,
 		RefreshHours: refreshHours,
 	}, true
 }

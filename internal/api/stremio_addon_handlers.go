@@ -361,7 +361,7 @@ func (s *Server) handleStremioAddonPlay(c *fiber.Ctx) error {
 	// Short-circuit: return cached stream if already processed within TTL
 	ttlHours := cfg.Stremio.NzbTTLHours
 	completedStatus := database.QueueStatusCompleted
-	if existing, err := s.queueRepo.ListQueueItems(ctx, &completedStatus, safeFilename, "", 1, 0, "updated_at", "desc"); err == nil && len(existing) > 0 {
+	if existing, err := s.queueRepo.ListQueueItems(ctx, &completedStatus, safeFilename, "", "", 1, 0, "updated_at", "desc"); err == nil && len(existing) > 0 {
 		prev := existing[0]
 		cacheValid := prev.StoragePath != nil && *prev.StoragePath != ""
 		if cacheValid && ttlHours > 0 && prev.CompletedAt != nil {
@@ -379,7 +379,7 @@ func (s *Server) handleStremioAddonPlay(c *fiber.Ctx) error {
 	// Coalesce concurrent plays of the same title so the release is downloaded/queued once.
 	v, err, _ := s.stremioPlayGroup.Do(safeFilename, func() (interface{}, error) {
 		// Serialized per title: reuse an in-flight or TTL-fresh import instead of re-downloading.
-		if items, e := s.queueRepo.ListQueueItems(ctx, nil, safeFilename, "", 1, 0, "updated_at", "desc"); e == nil && len(items) > 0 {
+		if items, e := s.queueRepo.ListQueueItems(ctx, nil, safeFilename, "", "", 1, 0, "updated_at", "desc"); e == nil && len(items) > 0 {
 			it := items[0]
 			switch it.Status {
 			case database.QueueStatusPending, database.QueueStatusProcessing, database.QueueStatusPaused:

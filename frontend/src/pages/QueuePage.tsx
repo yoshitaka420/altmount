@@ -54,7 +54,7 @@ import {
 	useUpdateQueueItemPriority,
 } from "../hooks/useApi";
 import { useQueueStream } from "../hooks/useQueueStream";
-import { formatBytes, formatRelativeTime, truncateText } from "../lib/utils";
+import { formatBytes, formatDuration, formatRelativeTime, truncateText } from "../lib/utils";
 import { type QueueItem, QueueStatus } from "../types/api";
 
 type QueueFilter = "" | "pending" | "processing" | "completed" | "failed";
@@ -67,6 +67,176 @@ const QUEUE_SECTIONS = [
 	{ id: "completed", title: "Completed", icon: CheckCircle2 },
 	{ id: "failed", title: "Failed", icon: XOctagon },
 ];
+
+function queueItemDurationSeconds(item: QueueItem): number | null {
+	if (!item.started_at) return null;
+	const end =
+		item.completed_at || (item.status === QueueStatus.FAILED ? item.updated_at : undefined);
+	if (!end) return null;
+	const seconds = Math.round(
+		(new Date(end).getTime() - new Date(item.started_at).getTime()) / 1000,
+	);
+	return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+}
+
+function queueItemFinishedAt(item: QueueItem): string | null {
+	if (item.status === QueueStatus.COMPLETED && item.completed_at) return item.completed_at;
+	if (item.status === QueueStatus.FAILED) return item.completed_at || item.updated_at;
+	return null;
+}
+
+function StremioImportsPanel({
+	items,
+	isLoading,
+	total,
+}: {
+	items: QueueItem[];
+	isLoading: boolean;
+	total: number;
+}) {
+	return (
+		<div className="card border-2 border-base-300/50 bg-base-100 shadow-md">
+			<div className="card-body p-0">
+				<div className="flex flex-col justify-between gap-3 border-base-200 border-b p-4 sm:flex-row sm:items-center sm:p-6">
+					<div className="flex items-center gap-3">
+						<div className="rounded-lg bg-secondary/10 p-2">
+							<PlayCircle className="h-5 w-5 text-secondary" />
+						</div>
+						<div>
+							<h2 className="font-bold text-lg">Stremio Imports</h2>
+							<div className="text-base-content/50 text-xs uppercase tracking-widest">
+								{total} item{total === 1 ? "" : "s"}
+							</div>
+						</div>
+					</div>
+				</div>
+
+				{isLoading ? (
+					<div className="p-8">
+						<LoadingTable columns={6} />
+					</div>
+				) : items.length > 0 ? (
+					<div className="overflow-x-auto">
+						<table className="table-zebra table-sm table">
+							<thead className="bg-base-200/50">
+								<tr>
+									<th className="font-bold text-base-content/80 text-xs uppercase tracking-widest">
+										NZB
+									</th>
+									<th className="font-bold text-base-content/80 text-xs uppercase tracking-widest">
+										Status
+									</th>
+									<th className="font-bold text-base-content/80 text-xs uppercase tracking-widest">
+										Import Time
+									</th>
+									<th className="font-bold text-base-content/80 text-xs uppercase tracking-widest">
+										Size
+									</th>
+									<th className="font-bold text-base-content/80 text-xs uppercase tracking-widest">
+										Indexer
+									</th>
+									<th className="font-bold text-base-content/80 text-xs uppercase tracking-widest">
+										Updated
+									</th>
+								</tr>
+							</thead>
+							<tbody>
+								{items.map((item) => {
+									const durationSeconds = queueItemDurationSeconds(item);
+									const finishedAt = queueItemFinishedAt(item);
+									return (
+										<tr key={item.id}>
+											<td className="min-w-72">
+												<div className="flex min-w-0 items-center gap-2">
+													<FileCode className="h-3.5 w-3.5 shrink-0 text-base-content/60" />
+													<div className="min-w-0 font-semibold text-sm">
+														<PathDisplay
+															path={item.nzb_display_name}
+															maxLength={76}
+															showFileName={true}
+														/>
+													</div>
+												</div>
+												{item.target_path && (
+													<div className="mt-1 min-w-0 pl-5.5 text-base-content/40 text-xs">
+														<PathDisplay path={item.target_path} maxLength={72} />
+													</div>
+												)}
+											</td>
+											<td>
+												<div className="flex min-w-28 flex-col gap-1">
+													{item.status === QueueStatus.PROCESSING && item.percentage != null ? (
+														<>
+															<div className="flex justify-between font-bold font-mono text-base-content/80 text-xs">
+																<span>{item.stage ?? "RUNNING"}</span>
+																<span>{item.percentage}%</span>
+															</div>
+															<progress
+																className="progress progress-secondary h-1.5 w-full"
+																value={item.percentage}
+																max={100}
+															/>
+														</>
+													) : (
+														<StatusBadge status={item.status} />
+													)}
+												</div>
+											</td>
+											<td>
+												{durationSeconds === null ? (
+													<span className="text-base-content/40">-</span>
+												) : (
+													<span className="badge badge-outline badge-sm font-mono">
+														{formatDuration(durationSeconds)}
+													</span>
+												)}
+											</td>
+											<td>
+												{item.file_size ? (
+													<span className="font-mono text-xs opacity-70">
+														{formatBytes(item.file_size)}
+													</span>
+												) : (
+													<span className="text-base-content/40">-</span>
+												)}
+											</td>
+											<td className="max-w-44">
+												{item.indexer ? (
+													<div className="flex min-w-0 items-center gap-1 text-xs">
+														<Globe className="h-3 w-3 shrink-0 text-base-content/50" />
+														<span className="truncate">{item.indexer}</span>
+													</div>
+												) : (
+													<span className="text-base-content/40">-</span>
+												)}
+											</td>
+											<td>
+												<span className="whitespace-nowrap text-xs opacity-70">
+													{finishedAt
+														? formatRelativeTime(finishedAt)
+														: item.started_at
+															? `Started ${formatRelativeTime(item.started_at)}`
+															: `Added ${formatRelativeTime(item.created_at)}`}
+												</span>
+											</td>
+										</tr>
+									);
+								})}
+							</tbody>
+						</table>
+					</div>
+				) : (
+					<div className="flex flex-col items-center justify-center py-12">
+						<div className="rounded-full bg-base-200 p-4">
+							<PlayCircle className="h-8 w-8 opacity-20" />
+						</div>
+						<h3 className="mt-4 font-bold text-base-content/60 text-sm">No Stremio Imports</h3>
+					</div>
+				)}
+			</div>
+		</div>
+	);
+}
 
 export function QueuePage() {
 	const [view, setView] = useState<QueueView>("list");
@@ -103,18 +273,33 @@ export function QueuePage() {
 		search: searchTerm || undefined,
 		sort_by: sortBy,
 		sort_order: sortOrder,
+		source: "regular",
+	});
+	const {
+		data: stremioQueueResponse,
+		isLoading: isStremioLoading,
+		refetch: refetchStremio,
+	} = useQueue({
+		limit: 12,
+		offset: 0,
+		sort_by: "updated_at",
+		sort_order: "desc",
+		source: "stremio",
 	});
 
 	const queueData = queueResponse?.data;
 	const meta = queueResponse?.meta;
 	const totalPages = meta?.total ? Math.ceil(meta.total / pageSize) : 0;
+	const stremioQueueData = stremioQueueResponse?.data;
+	const stremioMeta = stremioQueueResponse?.meta;
 
 	const { progress: liveProgress } = useQueueStream({
 		enabled: view === "list",
 		onQueueChanged: useCallback(() => {
 			refetch();
+			refetchStremio();
 			queryClient.invalidateQueries({ queryKey: ["queue", "stats"] });
-		}, [refetch, queryClient]),
+		}, [refetch, refetchStremio, queryClient]),
 	});
 
 	const enrichedQueueData = useMemo(() => {
@@ -131,7 +316,16 @@ export function QueuePage() {
 		});
 	}, [queueData, liveProgress]);
 
-	const { data: stats } = useQueueStats();
+	const enrichedStremioQueueData = useMemo(() => {
+		if (!stremioQueueData) return [];
+		return stremioQueueData.map((item) => ({
+			...item,
+			percentage: liveProgress[item.id]?.percentage ?? item.percentage,
+			stage: liveProgress[item.id]?.stage,
+		}));
+	}, [stremioQueueData, liveProgress]);
+
+	const { data: stats } = useQueueStats(undefined, "regular");
 	const deleteItem = useDeleteQueueItem();
 	const deleteBulk = useDeleteBulkQueueItems();
 	const restartBulk = useRestartBulkQueueItems();
@@ -1088,6 +1282,12 @@ export function QueuePage() {
 									/>
 								</div>
 							)}
+
+							<StremioImportsPanel
+								items={enrichedStremioQueueData}
+								isLoading={isStremioLoading}
+								total={stremioMeta?.total ?? enrichedStremioQueueData.length}
+							/>
 						</div>
 					</div>
 				</div>

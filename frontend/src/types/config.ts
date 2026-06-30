@@ -674,6 +674,16 @@ export interface StreamCheckConfig {
 	acceptable_missing_percentage: number;
 	cache_ttl_minutes: number;
 	max_batch: number;
+	warden: StreamCheckWardenConfig;
+}
+
+export interface StreamCheckWardenConfig {
+	enabled: boolean;
+	db_path?: string;
+	quorum: number;
+	max_source_entries: number;
+	backbone_scope: boolean;
+	mark_dead: boolean;
 }
 
 // Helper type for configuration sections

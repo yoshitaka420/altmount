@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"github.com/javi11/altmount/internal/auth"
 	"github.com/javi11/altmount/internal/database"
 	"github.com/javi11/altmount/internal/importer/utils/nzbtrim"
@@ -224,7 +225,7 @@ func (s *Server) handleNzbStreams(c *fiber.Ctx) error {
 
 		// Check completed cache inside the critical section so two concurrent
 		// callers can't both miss it and both enqueue the same NZB.
-		if existing, e := s.queueRepo.ListQueueItems(workCtx, &completedStatus, safeFilename, "", 1, 0, "updated_at", "desc"); e == nil && len(existing) > 0 {
+		if existing, e := s.queueRepo.ListQueueItems(workCtx, &completedStatus, safeFilename, "", "", 1, 0, "updated_at", "desc"); e == nil && len(existing) > 0 {
 			prev := existing[0]
 			cacheValid := prev.StoragePath != nil && *prev.StoragePath != ""
 			if cacheValid && ttlHours > 0 && prev.CompletedAt != nil {
@@ -238,7 +239,7 @@ func (s *Server) handleNzbStreams(c *fiber.Ctx) error {
 		}
 
 		// Join an existing active queue item instead of re-adding.
-		if activeItems, e := s.queueRepo.ListQueueItems(workCtx, nil, safeFilename, "", 1, 0, "updated_at", "desc"); e == nil && len(activeItems) > 0 {
+		if activeItems, e := s.queueRepo.ListQueueItems(workCtx, nil, safeFilename, "", "", 1, 0, "updated_at", "desc"); e == nil && len(activeItems) > 0 {
 			it := activeItems[0]
 			switch it.Status {
 			case database.QueueStatusPending, database.QueueStatusProcessing, database.QueueStatusPaused:
@@ -267,7 +268,8 @@ func (s *Server) handleNzbStreams(c *fiber.Ctx) error {
 		}
 
 		priority := database.QueuePriorityHigh
-		item, err := s.importerService.AddToQueue(workCtx, tempPath, basePath, &category, &priority, nil, nil, nil)
+		stremioDownloadID := stremioDownloadIDPrefix + uuid.NewString()
+		item, err := s.importerService.AddToQueue(workCtx, tempPath, basePath, &category, &priority, nil, &stremioDownloadID, nil)
 		if err != nil {
 			os.Remove(tempPath)
 			return nil, fmt.Errorf("failed to add NZB to queue: %w", err)

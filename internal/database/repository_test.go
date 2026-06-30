@@ -90,6 +90,45 @@ func TestConcurrentQueueItemClaims(t *testing.T) {
 	assert.Equal(t, "processing", status, "Item status in database should be processing")
 }
 
+func TestListQueueItemsSourceFilter(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	setupQueueSchema(t, db)
+	_, err = db.Exec(`
+		INSERT INTO import_queue (id, download_id, nzb_path, category, status, priority, created_at, updated_at)
+		VALUES
+			(1, NULL, 'regular.nzb', 'Movies', 'completed', 1, datetime('now', '-3 minutes'), datetime('now', '-3 minutes')),
+			(2, 'stremio:abc', 'stremio-download-id.nzb', 'Movies', 'completed', 1, datetime('now', '-2 minutes'), datetime('now', '-2 minutes')),
+			(3, NULL, 'stremio-category.nzb', 'stremio', 'completed', 1, datetime('now', '-1 minutes'), datetime('now', '-1 minutes'))
+	`)
+	require.NoError(t, err)
+
+	repo := NewRepository(db, DialectSQLite)
+	ctx := context.Background()
+	completed := QueueStatusCompleted
+
+	regularCount, err := repo.CountQueueItems(ctx, &completed, "", "", "regular")
+	require.NoError(t, err)
+	assert.Equal(t, 1, regularCount)
+
+	stremioCount, err := repo.CountQueueItems(ctx, &completed, "", "", "stremio")
+	require.NoError(t, err)
+	assert.Equal(t, 2, stremioCount)
+
+	regular, err := repo.ListQueueItems(ctx, &completed, "", "", "regular", 10, 0, "updated_at", "desc")
+	require.NoError(t, err)
+	require.Len(t, regular, 1)
+	assert.Equal(t, "regular.nzb", regular[0].NzbPath)
+
+	stremio, err := repo.ListQueueItems(ctx, &completed, "", "", "stremio", 10, 0, "updated_at", "desc")
+	require.NoError(t, err)
+	require.Len(t, stremio, 2)
+	assert.Equal(t, "stremio-category.nzb", stremio[0].NzbPath)
+	assert.Equal(t, "stremio-download-id.nzb", stremio[1].NzbPath)
+}
+
 func TestConcurrentQueueItemClaims_MultipleItems(t *testing.T) {
 	// Setup: Test with multiple pending items
 	db, err := sql.Open("sqlite3", "file:test_concurrent_multiple?mode=memory&cache=shared")

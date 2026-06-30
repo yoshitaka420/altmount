@@ -17,6 +17,49 @@ export interface APIResponse<T = unknown> {
 	};
 }
 
+export type WardenTrust = "full" | "corroborate" | "observe";
+
+export interface WardenSourceInfo {
+	id: string;
+	kind: string;
+	name: string;
+	url?: string;
+	enabled: boolean;
+	trust: WardenTrust;
+	refreshHours: number;
+	lastChecked: number;
+	lastUpdated: number;
+	status?: string;
+	count: number;
+}
+
+export interface WardenSourcesResponse {
+	quorum: number;
+	localCount: number;
+	effectiveCount: number;
+	totalRows: number;
+	sources: WardenSourceInfo[];
+}
+
+export interface WardenImportResponse {
+	added: number;
+	total: number;
+	cleared: number;
+	sourceId?: string;
+}
+
+export interface WardenSourceMutateResponse {
+	sourceId?: string;
+	message?: string;
+	removed?: number;
+}
+
+export interface WardenSourcesImportResponse {
+	added: number;
+	skipped: number;
+	invalid: number;
+}
+
 // Queue types
 export const QueueStatus = {
 	PENDING: "pending",
@@ -29,6 +72,7 @@ export type QueueStatus = (typeof QueueStatus)[keyof typeof QueueStatus];
 
 export interface QueueItem {
 	id: number;
+	download_id?: string;
 	nzb_path: string;
 	nzb_display_name: string;
 	target_path: string;

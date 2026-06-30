@@ -726,7 +726,7 @@ func (r *Repository) UpdateQueueStats(ctx context.Context) error {
 }
 
 // ListQueueItems retrieves queue items with optional filtering
-func (r *Repository) ListQueueItems(ctx context.Context, status *QueueStatus, search string, category string, limit, offset int, sortBy, sortOrder string) ([]*ImportQueueItem, error) {
+func (r *Repository) ListQueueItems(ctx context.Context, status *QueueStatus, search string, category string, source string, limit, offset int, sortBy, sortOrder string) ([]*ImportQueueItem, error) {
 	var query string
 	var args []any
 
@@ -752,6 +752,8 @@ func (r *Repository) ListQueueItems(ctx context.Context, status *QueueStatus, se
 		conditions = append(conditions, "LOWER(category) = LOWER(?)")
 		conditionArgs = append(conditionArgs, category)
 	}
+
+	conditions, conditionArgs = appendQueueSourceFilter(conditions, conditionArgs, source)
 
 	if len(conditions) > 0 {
 		query = baseSelect + " WHERE " + strings.Join(conditions, " AND ")
@@ -877,7 +879,7 @@ func (r *Repository) ListActiveQueueItems(ctx context.Context, search string, ca
 }
 
 // CountQueueItems counts the total number of queue items matching the given filters
-func (r *Repository) CountQueueItems(ctx context.Context, status *QueueStatus, search string, category string) (int, error) {
+func (r *Repository) CountQueueItems(ctx context.Context, status *QueueStatus, search string, category string, source string) (int, error) {
 	var query string
 	var args []any
 
@@ -902,6 +904,8 @@ func (r *Repository) CountQueueItems(ctx context.Context, status *QueueStatus, s
 		conditionArgs = append(conditionArgs, category)
 	}
 
+	conditions, conditionArgs = appendQueueSourceFilter(conditions, conditionArgs, source)
+
 	if len(conditions) > 0 {
 		query = baseQuery + " WHERE " + strings.Join(conditions, " AND ")
 	} else {
@@ -917,6 +921,18 @@ func (r *Repository) CountQueueItems(ctx context.Context, status *QueueStatus, s
 	}
 
 	return count, nil
+}
+
+func appendQueueSourceFilter(conditions []string, args []any, source string) ([]string, []any) {
+	switch source {
+	case "stremio":
+		conditions = append(conditions, "(download_id LIKE ? OR LOWER(category) = ?)")
+		args = append(args, "stremio:%", "stremio")
+	case "regular":
+		conditions = append(conditions, "((download_id IS NULL OR download_id NOT LIKE ?) AND (category IS NULL OR LOWER(category) <> ?))")
+		args = append(args, "stremio:%", "stremio")
+	}
+	return conditions, args
 }
 
 // CountActiveQueueItems counts the total number of pending and processing queue items
@@ -1419,7 +1435,7 @@ func (r *Repository) GetProviderHistoricalStats(ctx context.Context, days int, i
 		if err := rows.Scan(&tsRaw, &stat.ProviderID, &stat.BytesDownloaded); err != nil {
 			return nil, fmt.Errorf("failed to scan provider historical stat: %w", err)
 		}
-		
+
 		switch v := tsRaw.(type) {
 		case time.Time:
 			stat.Timestamp = v

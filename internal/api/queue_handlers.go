@@ -91,6 +91,12 @@ func (s *Server) handleListQueue(c *fiber.Ctx) error {
 
 	// Parse search parameter
 	searchFilter := c.Query("search")
+	sourceFilter := c.Query("source")
+	switch sourceFilter {
+	case "", "regular", "stremio":
+	default:
+		return RespondValidationError(c, "Invalid source filter", "Valid values: regular, stremio")
+	}
 
 	// Parse sort parameters
 	sortBy := c.Query("sort_by", "updated_at")
@@ -121,13 +127,13 @@ func (s *Server) handleListQueue(c *fiber.Ctx) error {
 	}
 
 	// Get total count for pagination
-	totalCount, err := s.queueRepo.CountQueueItems(c.Context(), statusFilter, searchFilter, "")
+	totalCount, err := s.queueRepo.CountQueueItems(c.Context(), statusFilter, searchFilter, "", sourceFilter)
 	if err != nil {
 		return RespondInternalError(c, "Failed to count queue items", err.Error())
 	}
 
 	// Get queue items from repository
-	items, err := s.queueRepo.ListQueueItems(c.Context(), statusFilter, searchFilter, "", pagination.Limit, pagination.Offset, sortBy, sortOrder)
+	items, err := s.queueRepo.ListQueueItems(c.Context(), statusFilter, searchFilter, "", sourceFilter, pagination.Limit, pagination.Offset, sortBy, sortOrder)
 	if err != nil {
 		return RespondInternalError(c, "Failed to retrieve queue items", err.Error())
 	}
@@ -387,6 +393,34 @@ func (s *Server) handleGetQueueStats(c *fiber.Ctx) error {
 	stats, err := s.queueRepo.GetQueueStats(c.Context())
 	if err != nil {
 		return RespondInternalError(c, "Failed to retrieve queue statistics", err.Error())
+	}
+	sourceFilter := c.Query("source")
+	switch sourceFilter {
+	case "", "regular", "stremio":
+	default:
+		return RespondValidationError(c, "Invalid source filter", "Valid values: regular, stremio")
+	}
+	if sourceFilter != "" {
+		pending := database.QueueStatusPending
+		processing := database.QueueStatusProcessing
+		completed := database.QueueStatusCompleted
+		failed := database.QueueStatusFailed
+		counts := []struct {
+			status *database.QueueStatus
+			set    func(int)
+		}{
+			{&pending, func(v int) { stats.TotalQueued = v }},
+			{&processing, func(v int) { stats.TotalProcessing = v }},
+			{&completed, func(v int) { stats.TotalCompleted = v }},
+			{&failed, func(v int) { stats.TotalFailed = v }},
+		}
+		for _, item := range counts {
+			count, countErr := s.queueRepo.CountQueueItems(c.Context(), item.status, "", "", sourceFilter)
+			if countErr != nil {
+				return RespondInternalError(c, "Failed to retrieve queue statistics", countErr.Error())
+			}
+			item.set(count)
+		}
 	}
 
 	response := ToQueueStatsResponse(stats)

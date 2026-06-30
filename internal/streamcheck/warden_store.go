@@ -125,6 +125,7 @@ func (s *WardenStore) initialize(ctx context.Context) error {
 		"CREATE INDEX IF NOT EXISTS ix_warden_fp ON warden_entries(fp);",
 		"CREATE INDEX IF NOT EXISTS ix_warden_dead_at ON warden_entries(dead_at);",
 		"INSERT OR IGNORE INTO warden_sources (id, kind, name, url, enabled, trust, refresh_hours) VALUES ('local', 'local', 'My list', NULL, 1, 'full', 24);",
+		"UPDATE warden_sources SET trust = 'full' WHERE trust <> 'full';",
 	} {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
 			return err
@@ -640,14 +641,7 @@ func (s *WardenStore) scalarInt(ctx context.Context, query string) int {
 }
 
 func normalizeTrust(trust string) string {
-	switch strings.TrimSpace(strings.ToLower(trust)) {
-	case TrustFull:
-		return TrustFull
-	case TrustObserve:
-		return TrustObserve
-	default:
-		return TrustCorroborate
-	}
+	return TrustFull
 }
 
 func clampRefreshHours(hours int) int {

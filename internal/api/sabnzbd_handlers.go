@@ -823,7 +823,7 @@ func (s *Server) handleSABnzbdHistory(c *fiber.Ctx) error {
 	// Fetch items from active queue
 	// We use a larger set here to ensure we get everything for deduplication and combined history
 	completedStatus := database.QueueStatusCompleted
-	completedQueueItems, err := s.queueRepo.ListQueueItems(ctx, &completedStatus, "", categoryFilter, 2000, 0, "updated_at", "desc")
+	completedQueueItems, err := s.queueRepo.ListQueueItems(ctx, &completedStatus, "", categoryFilter, "", 2000, 0, "updated_at", "desc")
 	if err != nil {
 		return s.writeSABnzbdErrorFiber(c, "Failed to get completed items from queue")
 	}
@@ -896,7 +896,7 @@ func (s *Server) handleSABnzbdHistory(c *fiber.Ctx) error {
 
 	// Get failed items from active queue
 	failedStatus := database.QueueStatusFailed
-	failed, err := s.queueRepo.ListQueueItems(ctx, &failedStatus, "", categoryFilter, 1000, 0, "updated_at", "desc")
+	failed, err := s.queueRepo.ListQueueItems(ctx, &failedStatus, "", categoryFilter, "", 1000, 0, "updated_at", "desc")
 	if err != nil {
 		return s.writeSABnzbdErrorFiber(c, "Failed to get failed items")
 	}
