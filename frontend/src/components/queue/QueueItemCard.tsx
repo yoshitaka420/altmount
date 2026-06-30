@@ -15,6 +15,7 @@ import {
 import { memo, useState } from "react";
 import { formatBytes, formatRelativeTime, truncateText } from "../../lib/utils";
 import { type QueueItem, QueueStatus } from "../../types/api";
+import { getStreamBlocklistQueueNote } from "../../utils/queueMetadata";
 import { PathDisplay } from "../ui/PathDisplay";
 import { StatusBadge } from "../ui/StatusBadge";
 
@@ -48,6 +49,7 @@ export const QueueItemCard = memo(function QueueItemCard({
 	isRegenerateSymlinkPending,
 }: QueueItemCardProps) {
 	const [isExpanded, setIsExpanded] = useState(false);
+	const streamBlocklistNote = getStreamBlocklistQueueNote(item);
 
 	return (
 		<div className="card border-2 border-base-300/50 bg-base-100 shadow-md">
@@ -75,6 +77,12 @@ export const QueueItemCard = memo(function QueueItemCard({
 							<div className="mt-1 flex items-center gap-1 text-base-content/50 text-xs">
 								<Globe className="h-3 w-3 shrink-0" />
 								<span className="truncate">{item.indexer}</span>
+							</div>
+						)}
+						{streamBlocklistNote && (
+							<div className="mt-1 flex items-start gap-1 text-error/80 text-xs leading-snug">
+								<AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+								<span>{streamBlocklistNote}</span>
 							</div>
 						)}
 

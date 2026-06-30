@@ -17,6 +17,49 @@ export interface APIResponse<T = unknown> {
 	};
 }
 
+export type StreamBlocklistTrust = "full" | "corroborate" | "observe";
+
+export interface StreamBlocklistSourceInfo {
+	id: string;
+	kind: string;
+	name: string;
+	url?: string;
+	enabled: boolean;
+	trust: StreamBlocklistTrust;
+	refreshHours: number;
+	lastChecked: number;
+	lastUpdated: number;
+	status?: string;
+	count: number;
+}
+
+export interface StreamBlocklistSourcesResponse {
+	quorum: number;
+	localCount: number;
+	effectiveCount: number;
+	totalRows: number;
+	sources: StreamBlocklistSourceInfo[];
+}
+
+export interface StreamBlocklistImportResponse {
+	added: number;
+	total: number;
+	cleared: number;
+	sourceId?: string;
+}
+
+export interface StreamBlocklistSourceMutateResponse {
+	sourceId?: string;
+	message?: string;
+	removed?: number;
+}
+
+export interface StreamBlocklistSourcesImportResponse {
+	added: number;
+	skipped: number;
+	invalid: number;
+}
+
 // Queue types
 export const QueueStatus = {
 	PENDING: "pending",

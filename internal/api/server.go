@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"runtime"
 	"strings"
@@ -70,7 +71,9 @@ type Server struct {
 	ready               atomic.Bool
 
 	// streamChecker verifies NZB segment availability for POST /api/nzb/check.
-	streamChecker *streamcheck.Checker
+	streamChecker         *streamcheck.Checker
+	streamBlocklistStore  *streamcheck.StreamBlocklistStore
+	streamBlocklistRemote *streamcheck.StreamBlocklistRemoteSourceService
 
 	speedtest     *speedtestCoordinator
 	speedtestOnce sync.Once
@@ -125,9 +128,20 @@ func NewServer(
 		updater:             updater.Default(),
 	}
 
-	// On-demand NZB availability checker (POST /api/nzb/check). configManager.GetConfig
-	// satisfies config.ConfigGetter, so live config changes apply per request.
-	server.streamChecker = streamcheck.NewChecker(poolManager, configManager.GetConfig)
+	if configManager != nil {
+		streamBlocklistStore, err := streamcheck.NewStreamBlocklistStore(configManager.GetConfig)
+		if err != nil {
+			slog.Warn("Failed to initialize stream blocklist store", "error", err)
+		} else {
+			server.streamBlocklistStore = streamBlocklistStore
+			server.streamBlocklistRemote = streamcheck.NewStreamBlocklistRemoteSourceService(streamBlocklistStore)
+			server.streamBlocklistRemote.Start(context.Background())
+			if importService != nil {
+				importService.SetStreamBlocklistStore(streamBlocklistStore)
+			}
+		}
+		server.streamChecker = streamcheck.NewChecker(poolManager, configManager.GetConfig, streamcheck.WithStreamBlocklist(server.streamBlocklistStore))
+	}
 
 	// Wire stream-activity ↔ pool admission. Streams notify the pool when they
 	// start/stop; the pool reads the active stream count to pick its
@@ -239,6 +253,17 @@ func (s *Server) SetupRoutes(app *fiber.App) {
 			api.Use(auth.RequireAuthWithSkip(tokenService, s.userRepo, skipPaths))
 		}
 	}
+
+	api.Get("/get-stream-blocklist", s.handleGetStreamBlocklist)
+	api.Get("/stream-blocklist-sources", s.handleStreamBlocklistSources)
+	api.Post("/stream-blocklist-import", s.handleStreamBlocklistImport)
+	api.Get("/stream-blocklist-export", s.handleStreamBlocklistExport)
+	api.Post("/stream-blocklist-source-add", s.handleStreamBlocklistSourceAdd)
+	api.Post("/stream-blocklist-source-update", s.handleStreamBlocklistSourceUpdate)
+	api.Post("/stream-blocklist-source-remove", s.handleStreamBlocklistSourceRemove)
+	api.Post("/stream-blocklist-source-refresh", s.handleStreamBlocklistSourceRefresh)
+	api.Post("/stream-blocklist-sources-import", s.handleStreamBlocklistSourcesImport)
+	api.Get("/stream-blocklist-sources-export", s.handleStreamBlocklistSourcesExport)
 
 	// NZBDav Imports (now protected by JWT auth)
 	api.Post("/import/nzbdav", s.handleImportNzbdav)

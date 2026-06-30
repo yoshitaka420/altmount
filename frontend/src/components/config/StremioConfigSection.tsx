@@ -1,7 +1,16 @@
-import { Check, Copy, ExternalLink, Save, Tv, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { Check, Copy, ExternalLink, Save, ShieldCheck, Tv, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { copyToClipboard } from "../../lib/utils";
-import type { ConfigResponse, ProwlarrConfig, StremioConfig } from "../../types/config";
+import type {
+	ConfigResponse,
+	ProwlarrConfig,
+	StreamCheckConfig,
+	StremioConfig,
+} from "../../types/config";
+import {
+	StreamCheckConfigSection,
+	type StreamCheckConfigSectionHandle,
+} from "./StreamCheckConfigSection";
 import { LoadingSpinner } from "../ui/LoadingSpinner";
 
 interface TagInputProps {
@@ -74,7 +83,7 @@ function TagInput({
 
 interface StremioConfigSectionProps {
 	config: ConfigResponse;
-	onUpdate?: (section: string, data: StremioConfig) => Promise<void>;
+	onUpdate?: (section: string, data: StremioConfig | StreamCheckConfig) => Promise<void>;
 	isReadOnly?: boolean;
 	isUpdating?: boolean;
 }
@@ -109,7 +118,10 @@ export function StremioConfigSection({
 		prowlarr: resolveProwlarr(config.stremio?.prowlarr),
 	});
 	const [hasChanges, setHasChanges] = useState(false);
+	const [streamCheckHasChanges, setStreamCheckHasChanges] = useState(false);
+	const [isSaving, setIsSaving] = useState(false);
 	const [urlCopied, setUrlCopied] = useState(false);
+	const streamCheckRef = useRef<StreamCheckConfigSectionHandle>(null);
 
 	useEffect(() => {
 		setFormData({
@@ -144,9 +156,19 @@ export function StremioConfigSection({
 	};
 
 	const handleSave = async () => {
-		if (onUpdate && hasChanges) {
-			await onUpdate("stremio", formData);
-			setHasChanges(false);
+		if (!onUpdate || isSaving) return;
+
+		setIsSaving(true);
+		try {
+			if (hasChanges) {
+				await onUpdate("stremio", formData);
+				setHasChanges(false);
+			}
+			if (streamCheckRef.current?.hasChanges) {
+				await streamCheckRef.current.save();
+			}
+		} finally {
+			setIsSaving(false);
 		}
 	};
 
@@ -184,7 +206,7 @@ export function StremioConfigSection({
 
 					<div className="flex items-center justify-between gap-4">
 						<div className="min-w-0 flex-1">
-							<h5 className="break-words font-bold text-sm">Enable Stremio Integration</h5>
+							<h5 className="break-words font-bold text-sm">Enable Stremio Endpoint</h5>
 							<p className="mt-1 break-words text-[11px] text-base-content/50 leading-relaxed">
 								Activates the Stremio addon endpoints and the{" "}
 								<code className="rounded bg-base-300 px-1 py-0.5 font-mono text-[10px]">
@@ -382,17 +404,38 @@ export function StremioConfigSection({
 				</div>
 			</div>
 
+			<div className="border-base-200 border-t pt-10">
+				<div className="mb-8 flex items-center gap-2">
+					<ShieldCheck className="h-5 w-5 text-base-content/60" />
+					<h3 className="font-bold text-base-content text-lg">Stream Check & Blocklist</h3>
+					<div className="h-px flex-1 bg-base-300/60" />
+				</div>
+				<StreamCheckConfigSection
+					ref={streamCheckRef}
+					config={config}
+					onUpdate={onUpdate}
+					isReadOnly={isReadOnly}
+					isUpdating={isUpdating}
+					hideSaveButton
+					onDirtyChange={setStreamCheckHasChanges}
+				/>
+			</div>
+
 			{/* Save Button */}
 			{!isReadOnly && (
 				<div className="flex justify-end border-base-200 border-t pt-4">
 					<button
 						type="button"
-						className={`btn btn-primary px-10 shadow-lg shadow-primary/20 ${!hasChanges && "btn-ghost border-base-300"}`}
+						className={`btn btn-primary px-10 shadow-lg shadow-primary/20 ${
+							!hasChanges && !streamCheckHasChanges && "btn-ghost border-base-300"
+						}`}
 						onClick={handleSave}
-						disabled={!hasChanges || isUpdating}
+						disabled={
+							!onUpdate || (!hasChanges && !streamCheckHasChanges) || isUpdating || isSaving
+						}
 					>
-						{isUpdating ? <LoadingSpinner size="sm" /> : <Save className="h-4 w-4" />}
-						{isUpdating ? "Saving..." : "Save Changes"}
+						{isUpdating || isSaving ? <LoadingSpinner size="sm" /> : <Save className="h-4 w-4" />}
+						{isUpdating || isSaving ? "Saving..." : "Save Changes"}
 					</button>
 				</div>
 			)}

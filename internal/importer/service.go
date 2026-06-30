@@ -31,6 +31,7 @@ import (
 	"github.com/javi11/altmount/internal/pool"
 	"github.com/javi11/altmount/internal/progress"
 	"github.com/javi11/altmount/internal/sabnzbd"
+	"github.com/javi11/altmount/internal/streamcheck"
 	"github.com/javi11/altmount/internal/utils"
 	"github.com/javi11/altmount/pkg/rclonecli"
 	"github.com/javi11/nzbparser"
@@ -172,24 +173,25 @@ func (s *Service) GetPostProcessor() *postprocessor.Coordinator {
 
 // Service provides NZB import functionality with manual directory scanning and queue-based processing
 type Service struct {
-	config          ServiceConfig
-	database        *database.DB              // Database for processing queue
-	metadataService *metadata.MetadataService // Metadata service for file processing
-	processor       *Processor
-	postProcessor   *postprocessor.Coordinator    // Post-import processing coordinator
-	queueManager    *queue.Manager                // Queue worker management
-	dirScanner      *scanner.DirectoryScanner     // Manual directory scanning
-	watcher         *scanner.Watcher              // Directory watcher for automated imports
-	nzbdavImporter  *scanner.NzbDavImporter       // NZBDav database imports
-	rcloneClient    rclonecli.RcloneRcClient      // Optional rclone client for VFS notifications
-	configGetter    config.ConfigGetter           // Config getter for dynamic configuration access
-	sabnzbdClient   *sabnzbd.SABnzbdClient        // SABnzbd client for fallback
-	arrsService     *arrs.Service                 // ARRs service for triggering scans
-	healthRepo      *database.HealthRepository    // Health repository for updating health status
-	broadcaster     *progress.ProgressBroadcaster // WebSocket progress broadcaster
-	userRepo        *database.UserRepository      // User repository for API key lookup
-	poolManager     pool.Manager                  // Pool manager — used to push admission caps on config change
-	log             *slog.Logger
+	config               ServiceConfig
+	database             *database.DB              // Database for processing queue
+	metadataService      *metadata.MetadataService // Metadata service for file processing
+	processor            *Processor
+	postProcessor        *postprocessor.Coordinator        // Post-import processing coordinator
+	queueManager         *queue.Manager                    // Queue worker management
+	dirScanner           *scanner.DirectoryScanner         // Manual directory scanning
+	watcher              *scanner.Watcher                  // Directory watcher for automated imports
+	nzbdavImporter       *scanner.NzbDavImporter           // NZBDav database imports
+	rcloneClient         rclonecli.RcloneRcClient          // Optional rclone client for VFS notifications
+	configGetter         config.ConfigGetter               // Config getter for dynamic configuration access
+	sabnzbdClient        *sabnzbd.SABnzbdClient            // SABnzbd client for fallback
+	arrsService          *arrs.Service                     // ARRs service for triggering scans
+	healthRepo           *database.HealthRepository        // Health repository for updating health status
+	broadcaster          *progress.ProgressBroadcaster     // WebSocket progress broadcaster
+	userRepo             *database.UserRepository          // User repository for API key lookup
+	poolManager          pool.Manager                      // Pool manager — used to push admission caps on config change
+	streamBlocklistStore *streamcheck.StreamBlocklistStore // Optional stream blocklist store for Stremio failures
+	log                  *slog.Logger
 
 	// Runtime state
 	mu      sync.RWMutex
@@ -442,6 +444,13 @@ func (s *Service) RegisterConfigChangeHandler(configManager any) {
 				"max_concurrent_imports_while_streaming", capWhileStreaming)
 		}
 	})
+}
+
+// SetStreamBlocklistStore wires the stream blocklist store used to mark failed Stremio imports.
+func (s *Service) SetStreamBlocklistStore(store *streamcheck.StreamBlocklistStore) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.streamBlocklistStore = store
 }
 
 // Stop stops the NZB import service and all queue workers
@@ -1362,6 +1371,7 @@ func (s *Service) handleProcessingFailure(ctx context.Context, item *database.Im
 	if err := s.database.Repository.UpdateQueueItemStatus(ctx, item.ID, database.QueueStatusFailed, &errorMessage); err != nil {
 		s.log.ErrorContext(ctx, "Failed to mark item as failed", "queue_id", item.ID, "error", err)
 	} else {
+		s.markFailedStremioImportDead(ctx, item)
 		s.log.ErrorContext(ctx, "Item failed",
 			"queue_id", item.ID,
 			"file", item.NzbPath)
@@ -1416,6 +1426,134 @@ func (s *Service) handleProcessingFailure(ctx context.Context, item *database.Im
 			s.log.ErrorContext(ctx, "Failed to move NZB to failed folder", "error", moveErr)
 		}
 	}
+}
+
+const stremioDownloadIDPrefix = "stremio:"
+
+type stremioImportMetadata struct {
+	Source                   string `json:"source,omitempty"`
+	Size                     int64  `json:"size,omitempty"`
+	Poster                   string `json:"poster,omitempty"`
+	UsenetDate               int64  `json:"usenet_date,omitempty"`
+	Date                     int64  `json:"date,omitempty"`
+	StreamBlocklistMarked    bool   `json:"stream_blocklist_marked_dead,omitempty"`
+	StreamBlocklistReason    string `json:"stream_blocklist_reason,omitempty"`
+	StreamBlocklistFailedPre bool   `json:"stream_blocklist_failed_preimport,omitempty"`
+}
+
+func (s *Service) markFailedStremioImportDead(ctx context.Context, item *database.ImportQueueItem) {
+	if item == nil || !isStremioQueueItem(item) {
+		return
+	}
+	if s.configGetter == nil {
+		return
+	}
+	cfg := s.configGetter()
+	if cfg == nil || !cfg.GetStreamCheckStreamBlocklistEnabled() || !cfg.GetStreamCheckStreamBlocklistMarkDead() {
+		return
+	}
+
+	s.mu.RLock()
+	streamBlocklistStore := s.streamBlocklistStore
+	s.mu.RUnlock()
+	if streamBlocklistStore == nil {
+		return
+	}
+
+	identity := stremioIdentityFromQueueMetadata(item.Metadata)
+	var parsed *nzbparser.Nzb
+	if item.NzbPath != "" {
+		f, err := os.Open(item.NzbPath)
+		if err == nil {
+			defer f.Close()
+			if nzb, parseErr := nzbparser.Parse(f); parseErr == nil {
+				parsed = nzb
+			} else {
+				s.log.DebugContext(ctx, "Failed to parse failed Stremio NZB for stream blocklist fingerprint",
+					"queue_id", item.ID, "nzb_path", item.NzbPath, "error", parseErr)
+			}
+		} else {
+			s.log.DebugContext(ctx, "Failed to open failed Stremio NZB for stream blocklist fingerprint",
+				"queue_id", item.ID, "nzb_path", item.NzbPath, "error", err)
+		}
+	}
+
+	fp := streamcheck.StreamBlocklistFingerprintFromNZB(parsed, identity)
+	if fp == "" {
+		s.log.DebugContext(ctx, "Failed Stremio import has no stream blocklist fingerprint", "queue_id", item.ID)
+		return
+	}
+	if err := streamBlocklistStore.MarkDead(ctx, fp); err != nil {
+		s.log.WarnContext(ctx, "Failed to add failed Stremio import to stream blocklist",
+			"queue_id", item.ID, "fingerprint", fp, "error", err)
+		return
+	}
+	if metadata := stremioMarkedDeadQueueMetadata(item.Metadata); metadata != nil {
+		if err := s.database.Repository.UpdateQueueItemMetadata(ctx, item.ID, metadata); err != nil {
+			s.log.WarnContext(ctx, "Failed to update failed Stremio import stream blocklist metadata",
+				"queue_id", item.ID, "error", err)
+		} else {
+			item.Metadata = metadata
+		}
+	}
+	s.log.InfoContext(ctx, "Added failed Stremio import to stream blocklist",
+		"queue_id", item.ID, "fingerprint", fp)
+}
+
+func isStremioQueueItem(item *database.ImportQueueItem) bool {
+	if item == nil {
+		return false
+	}
+	if item.DownloadID != nil && strings.HasPrefix(*item.DownloadID, stremioDownloadIDPrefix) {
+		return true
+	}
+	if item.Category != nil && strings.EqualFold(*item.Category, "stremio") {
+		return true
+	}
+	if item.Metadata != nil {
+		var metadata stremioImportMetadata
+		if json.Unmarshal([]byte(*item.Metadata), &metadata) == nil && strings.EqualFold(metadata.Source, "stremio") {
+			return true
+		}
+	}
+	return false
+}
+
+func stremioIdentityFromQueueMetadata(raw *string) streamcheck.Identity {
+	if raw == nil || *raw == "" {
+		return streamcheck.Identity{}
+	}
+	var metadata stremioImportMetadata
+	if err := json.Unmarshal([]byte(*raw), &metadata); err != nil {
+		return streamcheck.Identity{}
+	}
+	date := metadata.UsenetDate
+	if date == 0 {
+		date = metadata.Date
+	}
+	return streamcheck.Identity{
+		Size:       metadata.Size,
+		Poster:     metadata.Poster,
+		UsenetDate: date,
+	}
+}
+
+func stremioMarkedDeadQueueMetadata(raw *string) *string {
+	metadata := stremioImportMetadata{Source: "stremio"}
+	if raw != nil && *raw != "" {
+		_ = json.Unmarshal([]byte(*raw), &metadata)
+	}
+	metadata.Source = "stremio"
+	metadata.StreamBlocklistMarked = true
+	if metadata.StreamBlocklistReason == "" {
+		metadata.StreamBlocklistReason = "This failed Stremio import was added to the stream blocklist."
+	}
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return nil
+	}
+	value := string(encoded)
+	return &value
 }
 
 // runFailedItemCleanup periodically removes stale failed queue items and their NZB files.

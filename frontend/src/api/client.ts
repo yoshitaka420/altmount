@@ -28,6 +28,11 @@ import type {
 	SystemBrowseResponse,
 	UploadNZBLnkResponse,
 	User,
+	StreamBlocklistImportResponse,
+	StreamBlocklistSourceMutateResponse,
+	StreamBlocklistSourcesImportResponse,
+	StreamBlocklistSourcesResponse,
+	StreamBlocklistTrust,
 } from "../types/api";
 import type {
 	ConfigResponse,
@@ -225,6 +230,162 @@ class APIClient {
 		}
 	}
 
+	private async download(endpoint: string): Promise<Blob> {
+		const response = await fetch(`${this.baseURL}${endpoint}`, {
+			credentials: "include",
+			cache: "no-store",
+		});
+
+		if (response.type === "opaqueredirect") {
+			window.location.reload();
+			throw new APIError(302, "Session expired, redirecting to login", "");
+		}
+
+		if (!response.ok) {
+			if (response.status === 401) {
+				window.dispatchEvent(new CustomEvent("api:unauthorized"));
+			}
+			let errorData: ApiErrorEnvelope = {};
+			try {
+				errorData = await response.json();
+			} catch {
+				throw new APIError(response.status, `HTTP ${response.status}: ${response.statusText}`, "");
+			}
+			throw extractApiError(response.status, response.statusText, errorData);
+		}
+
+		return response.blob();
+	}
+
+	async getStreamBlocklistSources() {
+		return this.request<StreamBlocklistSourcesResponse>("/stream-blocklist-sources");
+	}
+
+	async importStreamBlocklistList(params: {
+		file: File;
+		target: "local" | "separate";
+		name?: string;
+		trust?: StreamBlocklistTrust;
+	}) {
+		const formData = new FormData();
+		formData.append("file", params.file);
+		formData.append("target", params.target);
+		if (params.name) formData.append("name", params.name);
+		if (params.trust) formData.append("trust", params.trust);
+
+		return this.request<StreamBlocklistImportResponse>("/stream-blocklist-import", {
+			method: "POST",
+			body: formData,
+			headers: {},
+		});
+	}
+
+	async clearStreamBlocklistLocal() {
+		const formData = new FormData();
+		formData.append("action", "clear");
+
+		return this.request<StreamBlocklistImportResponse>("/stream-blocklist-import", {
+			method: "POST",
+			body: formData,
+			headers: {},
+		});
+	}
+
+	async exportStreamBlocklistList(scope: "local" | "merged" = "merged") {
+		return this.download(`/stream-blocklist-export?scope=${encodeURIComponent(scope)}`);
+	}
+
+	async addStreamBlocklistSource(params: {
+		url: string;
+		name?: string;
+		trust?: StreamBlocklistTrust;
+		refreshHours?: number;
+	}) {
+		const formData = new FormData();
+		formData.append("url", params.url);
+		if (params.name) formData.append("name", params.name);
+		if (params.trust) formData.append("trust", params.trust);
+		if (params.refreshHours !== undefined) {
+			formData.append("refreshHours", params.refreshHours.toString());
+		}
+
+		return this.request<StreamBlocklistSourceMutateResponse>("/stream-blocklist-source-add", {
+			method: "POST",
+			body: formData,
+			headers: {},
+		});
+	}
+
+	async updateStreamBlocklistSource(params: {
+		id: string;
+		enabled?: boolean;
+		trust?: StreamBlocklistTrust;
+		refreshHours?: number;
+		name?: string;
+	}) {
+		const formData = new FormData();
+		formData.append("id", params.id);
+		if (params.enabled !== undefined) formData.append("enabled", params.enabled ? "true" : "false");
+		if (params.trust) formData.append("trust", params.trust);
+		if (params.refreshHours !== undefined) {
+			formData.append("refreshHours", params.refreshHours.toString());
+		}
+		if (params.name !== undefined) formData.append("name", params.name);
+
+		return this.request<StreamBlocklistSourceMutateResponse>("/stream-blocklist-source-update", {
+			method: "POST",
+			body: formData,
+			headers: {},
+		});
+	}
+
+	async removeStreamBlocklistSource(id: string) {
+		const formData = new FormData();
+		formData.append("id", id);
+
+		return this.request<StreamBlocklistSourceMutateResponse>("/stream-blocklist-source-remove", {
+			method: "POST",
+			body: formData,
+			headers: {},
+		});
+	}
+
+	async refreshStreamBlocklistSource(id: string) {
+		const formData = new FormData();
+		formData.append("id", id);
+
+		return this.request<StreamBlocklistSourceMutateResponse>("/stream-blocklist-source-refresh", {
+			method: "POST",
+			body: formData,
+			headers: {},
+		});
+	}
+
+	async importStreamBlocklistSources(params: {
+		text?: string;
+		file?: File;
+		trust?: StreamBlocklistTrust;
+		refreshHours?: number;
+	}) {
+		const formData = new FormData();
+		if (params.text) formData.append("text", params.text);
+		if (params.file) formData.append("file", params.file);
+		if (params.trust) formData.append("trust", params.trust);
+		if (params.refreshHours !== undefined) {
+			formData.append("refreshHours", params.refreshHours.toString());
+		}
+
+		return this.request<StreamBlocklistSourcesImportResponse>("/stream-blocklist-sources-import", {
+			method: "POST",
+			body: formData,
+			headers: {},
+		});
+	}
+
+	async exportStreamBlocklistSources() {
+		return this.download("/stream-blocklist-sources-export");
+	}
+
 	// Queue endpoints
 	async getQueue(params?: {
 		limit?: number;
@@ -234,6 +395,7 @@ class APIClient {
 		search?: string;
 		sort_by?: string;
 		sort_order?: "asc" | "desc";
+		source?: "regular" | "stremio";
 	}) {
 		const searchParams = new URLSearchParams();
 		if (params?.limit) searchParams.set("limit", params.limit.toString());
@@ -243,6 +405,7 @@ class APIClient {
 		if (params?.search) searchParams.set("search", params.search);
 		if (params?.sort_by) searchParams.set("sort_by", params.sort_by);
 		if (params?.sort_order) searchParams.set("sort_order", params.sort_order);
+		if (params?.source) searchParams.set("source", params.source);
 
 		const query = searchParams.toString();
 		return this.requestWithMeta<QueueItem[]>(`/queue${query ? `?${query}` : ""}`);
@@ -314,8 +477,12 @@ class APIClient {
 		});
 	}
 
-	async getQueueStats() {
-		return this.request<QueueStats>("/queue/stats");
+	async getQueueStats(source?: "regular" | "stremio") {
+		const searchParams = new URLSearchParams();
+		if (source) searchParams.set("source", source);
+
+		const query = searchParams.toString();
+		return this.request<QueueStats>(`/queue/stats${query ? `?${query}` : ""}`);
 	}
 
 	async getQueueHistory(days?: number) {

@@ -113,7 +113,6 @@ func (h *StreamHandler) authenticate(r *http.Request) (*database.User, bool) {
 	return nil, false
 }
 
-
 // GetHTTPHandler returns an http.Handler that serves files from NzbFilesystem
 // This handler:
 // - Requires authentication via download_key parameter
@@ -164,7 +163,15 @@ func (h *StreamHandler) serveFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set stream source and username for tracking
-	ctx = context.WithValue(ctx, utils.StreamSourceKey, "API")
+	streamSource := "API"
+	switch r.URL.Query().Get("source") {
+	case "Stremio":
+		streamSource = "Stremio"
+	case "API", "":
+	default:
+		streamSource = "API"
+	}
+	ctx = context.WithValue(ctx, utils.StreamSourceKey, streamSource)
 	ctx = context.WithValue(ctx, utils.StreamUserNameKey, userName)
 	ctx = context.WithValue(ctx, utils.ClientIPKey, r.RemoteAddr)
 	ctx = context.WithValue(ctx, utils.UserAgentKey, r.UserAgent())

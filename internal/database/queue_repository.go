@@ -363,6 +363,15 @@ func (r *QueueRepository) UpdateQueueItemStatus(ctx context.Context, id int64, s
 	return nil
 }
 
+// UpdateQueueItemMetadata updates the JSON metadata for a queue item.
+func (r *QueueRepository) UpdateQueueItemMetadata(ctx context.Context, id int64, metadata *string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE import_queue SET metadata = ?, updated_at = datetime('now') WHERE id = ?`, metadata, id)
+	if err != nil {
+		return fmt.Errorf("failed to update queue item metadata: %w", err)
+	}
+	return nil
+}
+
 // IncrementDailyStat increments the completed or failed count for the current day
 func (r *QueueRepository) IncrementDailyStat(ctx context.Context, statType string) error {
 	if statType != "completed" && statType != "failed" {

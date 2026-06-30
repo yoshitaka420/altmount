@@ -55,6 +55,7 @@ export function ActivityHub() {
 	const getClientApp = (ua?: string) => {
 		if (!ua) return { name: "Unknown Client", icon: User };
 		const lowUA = ua.toLowerCase();
+		if (lowUA.includes("stremio")) return { name: "Stremio", icon: Play };
 		if (lowUA.includes("plex")) return { name: "Plex", icon: Play };
 		if (lowUA.includes("infuse")) return { name: "Infuse", icon: Play };
 		if (lowUA.includes("vlc")) return { name: "VLC", icon: FileVideo };
@@ -79,9 +80,9 @@ export function ActivityHub() {
 	const groupedStreams = useMemo(() => {
 		if (!allStreams) return [];
 
-		// Filter to show only active streaming sessions (WebDAV or FUSE)
+		// Filter to show only active streaming sessions.
 		const streamingOnly = allStreams.filter((s) => {
-			const isSystemSource = s.source === "WebDAV" || s.source === "FUSE";
+			const isPlaybackSource = ["WebDAV", "FUSE", "API", "Stremio"].includes(s.source);
 			const isStreaming = s.status === "Streaming";
 
 			// Heuristic: Filter out metadata probes and very short system scans
@@ -92,7 +93,9 @@ export function ActivityHub() {
 			if (isAtEnd) return false;
 			if (isTooNew && ageSeconds < 5) return false;
 
-			return isSystemSource && (isStreaming || s.status === "Buffering" || s.status === "Stalled");
+			return (
+				isPlaybackSource && (isStreaming || s.status === "Buffering" || s.status === "Stalled")
+			);
 		});
 
 		const groups: Record<string, ActiveStream> = {};
@@ -180,7 +183,10 @@ export function ActivityHub() {
 									const isStalled =
 										stream.status === "Stalled" ||
 										(stream.bytes_per_second === 0 && stream.status !== "Buffering");
-									const clientApp = getClientApp(stream.user_agent);
+									const clientApp =
+										stream.source === "Stremio"
+											? { name: "Stremio", icon: Play }
+											: getClientApp(stream.user_agent);
 
 									return (
 										<div

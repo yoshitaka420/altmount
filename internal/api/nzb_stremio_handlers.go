@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,9 +17,13 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"github.com/javi11/altmount/internal/auth"
 	"github.com/javi11/altmount/internal/database"
+	"github.com/javi11/altmount/internal/httpclient"
 	"github.com/javi11/altmount/internal/importer/utils/nzbtrim"
+	"github.com/javi11/altmount/internal/streamcheck"
+	"github.com/javi11/nzbparser"
 )
 
 // mediaExtensions lists common video/media file extensions for Stremio stream filtering.
@@ -67,6 +73,19 @@ type StremioStreamsResponse struct {
 	// without re-processing. Callers such as AIOStreams can use this to show an
 	// "instant" indicator to the user.
 	Cached bool `json:"_cached"`
+}
+
+const stremioStreamBlocklistFailureMessage = "Blocked by Stream Blocklist"
+
+type stremioQueueMetadata struct {
+	Source                   string `json:"source,omitempty"`
+	Size                     int64  `json:"size,omitempty"`
+	Poster                   string `json:"poster,omitempty"`
+	UsenetDate               int64  `json:"usenet_date,omitempty"`
+	StreamBlocklistBlocked   bool   `json:"stream_blocklist_blocked,omitempty"`
+	StreamBlocklistMarked    bool   `json:"stream_blocklist_marked_dead,omitempty"`
+	StreamBlocklistReason    string `json:"stream_blocklist_reason,omitempty"`
+	StreamBlocklistFailedPre bool   `json:"stream_blocklist_failed_preimport,omitempty"`
 }
 
 // handleNzbStreams handles POST /api/nzb/streams.
@@ -142,8 +161,12 @@ func (s *Server) handleNzbStreams(c *fiber.Ctx) error {
 
 	if nzbURL != "" {
 		// Download NZB from the provided URL
-		const maxNzbFetchSize = 100 * 1024 * 1024 // 100 MB
-		resp, err := http.Get(nzbURL)             //nolint:gosec // URL is provided by an authenticated caller
+		const maxNzbFetchSize = 100 * 1024 * 1024                                // 100 MB
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, nzbURL, nil) //nolint:gosec // URL is provided by an authenticated caller
+		if err != nil {
+			return RespondBadRequest(c, "Invalid NZB URL", err.Error())
+		}
+		resp, err := httpclient.NewForExternal(cfg.Network, httpclient.LongTimeout).Do(req)
 		if err != nil {
 			return RespondBadRequest(c, "Failed to fetch NZB from URL", err.Error())
 		}
@@ -194,6 +217,7 @@ func (s *Server) handleNzbStreams(c *fiber.Ctx) error {
 	selector := stremioEpisodeSelectorFromRequest(c)
 
 	category := c.FormValue("category")
+	blocklistIdentity := streamcheckIdentityFromRequest(c)
 
 	timeoutSecs := 300
 	if ts := c.FormValue("timeout"); ts != "" {
@@ -224,7 +248,7 @@ func (s *Server) handleNzbStreams(c *fiber.Ctx) error {
 
 		// Check completed cache inside the critical section so two concurrent
 		// callers can't both miss it and both enqueue the same NZB.
-		if existing, e := s.queueRepo.ListQueueItems(workCtx, &completedStatus, safeFilename, "", 1, 0, "updated_at", "desc"); e == nil && len(existing) > 0 {
+		if existing, e := s.queueRepo.ListQueueItems(workCtx, &completedStatus, safeFilename, "", "", 1, 0, "updated_at", "desc"); e == nil && len(existing) > 0 {
 			prev := existing[0]
 			cacheValid := prev.StoragePath != nil && *prev.StoragePath != ""
 			if cacheValid && ttlHours > 0 && prev.CompletedAt != nil {
@@ -238,7 +262,7 @@ func (s *Server) handleNzbStreams(c *fiber.Ctx) error {
 		}
 
 		// Join an existing active queue item instead of re-adding.
-		if activeItems, e := s.queueRepo.ListQueueItems(workCtx, nil, safeFilename, "", 1, 0, "updated_at", "desc"); e == nil && len(activeItems) > 0 {
+		if activeItems, e := s.queueRepo.ListQueueItems(workCtx, nil, safeFilename, "", "", 1, 0, "updated_at", "desc"); e == nil && len(activeItems) > 0 {
 			it := activeItems[0]
 			switch it.Status {
 			case database.QueueStatusPending, database.QueueStatusProcessing, database.QueueStatusPaused:
@@ -247,10 +271,6 @@ func (s *Server) handleNzbStreams(c *fiber.Ctx) error {
 		}
 
 		// --- Save NZB to temp directory and add to queue ---
-		if s.importerService == nil {
-			return nil, fmt.Errorf("importer service not available")
-		}
-
 		if err := os.MkdirAll(uploadDir, 0755); err != nil {
 			return nil, fmt.Errorf("failed to create upload directory: %w", err)
 		}
@@ -267,7 +287,27 @@ func (s *Server) handleNzbStreams(c *fiber.Ctx) error {
 		}
 
 		priority := database.QueuePriorityHigh
-		item, err := s.importerService.AddToQueue(workCtx, tempPath, basePath, &category, &priority, nil, nil)
+		if cfg.GetStreamCheckStreamBlocklistEnabled() && s.isStremioStreamBlocklisted(workCtx, nzbData, blocklistIdentity) {
+			item, err := s.addFailedStremioStreamBlocklistQueueItem(workCtx, tempPath, &category, priority, blocklistIdentity)
+			if err != nil {
+				os.Remove(tempPath)
+				return nil, fmt.Errorf("failed to add stream-blocklisted NZB to queue: %w", err)
+			}
+			slog.InfoContext(workCtx, "NZB blocked by stream blocklist during Stremio queue admission",
+				"queue_id", item.ID,
+				"nzb_path", tempPath)
+			return item.ID, nil
+		}
+
+		stremioMetadata := stremioQueueMetadataForIdentity(blocklistIdentity)
+
+		if s.importerService == nil {
+			os.Remove(tempPath)
+			return nil, fmt.Errorf("importer service not available")
+		}
+
+		stremioDownloadID := stremioDownloadIDPrefix + uuid.NewString()
+		item, err := s.importerService.AddToQueue(workCtx, tempPath, basePath, &category, &priority, stremioMetadata, &stremioDownloadID, nil)
 		if err != nil {
 			os.Remove(tempPath)
 			return nil, fmt.Errorf("failed to add NZB to queue: %w", err)
@@ -285,6 +325,117 @@ func (s *Server) handleNzbStreams(c *fiber.Ctx) error {
 	}
 
 	return s.waitAndRespond(c, rawID.(int64), baseURL, downloadKey, nzbName, selector, timeoutSecs)
+}
+
+func (s *Server) isStremioStreamBlocklisted(ctx context.Context, nzbData []byte, identity streamcheck.Identity) bool {
+	if s.streamBlocklistStore == nil {
+		return false
+	}
+	parsed, err := nzbparser.Parse(bytes.NewReader(nzbData))
+	if err != nil {
+		return false
+	}
+	fp := streamcheck.StreamBlocklistFingerprintFromNZB(parsed, identity)
+	return fp != "" && s.streamBlocklistStore.IsDeadAnywhere(ctx, fp)
+}
+
+func streamcheckIdentityFromRequest(c *fiber.Ctx) streamcheck.Identity {
+	get := func(key string) string {
+		if value := c.FormValue(key); value != "" {
+			return value
+		}
+		return c.Query(key)
+	}
+	date := parseInt64Param(get("usenet_date"))
+	if date == 0 {
+		date = parseInt64Param(get("date"))
+	}
+	return streamcheck.Identity{
+		Size:       parseInt64Param(get("size")),
+		Poster:     get("poster"),
+		UsenetDate: date,
+	}
+}
+
+func parseInt64Param(value string) int64 {
+	if value == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func stremioQueueMetadataForIdentity(identity streamcheck.Identity) *string {
+	metadata := stremioQueueMetadata{
+		Source:     "stremio",
+		Size:       identity.Size,
+		Poster:     identity.Poster,
+		UsenetDate: identity.UsenetDate,
+	}
+	raw, err := json.Marshal(metadata)
+	if err != nil {
+		return nil
+	}
+	value := string(raw)
+	return &value
+}
+
+func stremioStreamBlocklistMetadata(identity streamcheck.Identity) *string {
+	metadata := stremioQueueMetadata{
+		Source:                   "stremio",
+		Size:                     identity.Size,
+		Poster:                   identity.Poster,
+		UsenetDate:               identity.UsenetDate,
+		StreamBlocklistBlocked:   true,
+		StreamBlocklistReason:    "This release was blocked by the stream blocklist before import.",
+		StreamBlocklistFailedPre: true,
+	}
+	raw, err := json.Marshal(metadata)
+	if err != nil {
+		return nil
+	}
+	value := string(raw)
+	return &value
+}
+
+func (s *Server) addFailedStremioStreamBlocklistQueueItem(ctx context.Context, nzbPath string, category *string, priority database.QueuePriority, identity streamcheck.Identity) (*database.ImportQueueItem, error) {
+	if s.queueRepo == nil {
+		return nil, fmt.Errorf("queue repository not available")
+	}
+
+	downloadID := stremioDownloadIDPrefix + uuid.NewString()
+	item := &database.ImportQueueItem{
+		DownloadID: &downloadID,
+		NzbPath:    nzbPath,
+		Category:   category,
+		Priority:   priority,
+		Status:     database.QueueStatusFailed,
+		RetryCount: 0,
+		MaxRetries: 0,
+		Metadata:   stremioStreamBlocklistMetadata(identity),
+		CreatedAt:  time.Now(),
+	}
+	if err := s.queueRepo.AddToQueue(ctx, item); err != nil {
+		return nil, err
+	}
+	if item.ID == 0 {
+		return nil, fmt.Errorf("failed to read created queue item ID")
+	}
+
+	message := stremioStreamBlocklistFailureMessage
+	if err := s.queueRepo.UpdateQueueItemStatus(ctx, item.ID, database.QueueStatusFailed, &message); err != nil {
+		return nil, err
+	}
+	if updated, err := s.queueRepo.GetQueueItem(ctx, item.ID); err == nil && updated != nil {
+		item = updated
+	}
+	if s.progressBroadcaster != nil {
+		s.progressBroadcaster.BroadcastQueueChanged()
+	}
+	return item, nil
 }
 
 // waitAndRespond subscribes to the progress broadcaster and waits for the queue item to
@@ -467,7 +618,9 @@ func (s *Server) listStremioMediaFiles(storagePath string) ([]string, error) {
 // stremioStreamFromPath creates a StremioStream for a given virtual file path.
 func stremioStreamFromPath(virtualPath, baseURL, downloadKey string) StremioStream {
 	streamURL := baseURL + "/api/files/stream?path=" +
-		url.QueryEscape(virtualPath) + "&download_key=" + url.QueryEscape(downloadKey)
+		url.QueryEscape(virtualPath) +
+		"&download_key=" + url.QueryEscape(downloadKey) +
+		"&source=" + url.QueryEscape("Stremio")
 	filename := filepath.Base(virtualPath)
 	return StremioStream{
 		URL:   streamURL,

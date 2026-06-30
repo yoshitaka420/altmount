@@ -210,6 +210,31 @@ sabnzbd:
   fallback_host: '' # External SABnzbd URL (e.g., "http://localhost:8080")
   fallback_api_key: '' # External SABnzbd API key
 
+# Stremio integration
+stremio:
+  enabled: false # Enable Stremio addon and NZB stream endpoints
+  nzb_ttl_hours: 24 # Reuse completed Stremio NZBs for this many hours (0 = no expiry)
+  base_url: '' # Public base URL for generated stream links; empty = auto-detect
+  prowlarr:
+    enabled: false # Enable Prowlarr-backed Stremio search
+    host: 'http://localhost:9696'
+    api_key: ''
+    categories: [2000, 2010, 2030, 2040, 2045, 2060, 5000, 5010, 5030, 5040]
+    languages: [] # Optional title keywords; empty = no language filter
+    qualities: [] # Optional title keywords; empty = no quality filter
+
+# Stream Check and Stream Blocklist configuration
+stream_check:
+  enabled: false # Enable POST /api/nzb/check availability endpoint
+  segment_sample_percentage: 5 # Percentage of NZB segments to STAT-sample (1-100)
+  max_connections: 10 # Concurrent NNTP STAT requests per check
+  timeout_seconds: 15 # Per-segment STAT timeout
+  acceptable_missing_percentage: 0 # Missing percentage allowed before "dead"
+  cache_ttl_minutes: 30 # Verdict cache TTL; 0 disables caching
+  max_batch: 50 # Maximum NZBs per check request
+  stream_blocklist:
+    db_path: '' # Optional custom blocklist database path; filtering defaults are backend-managed
+
 # Radarr/Sonarr/Lidarr/Readarr/Whisparr arrs configuration
 arrs:
   enabled: false # Enable arrs service

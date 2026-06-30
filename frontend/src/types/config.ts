@@ -674,6 +674,16 @@ export interface StreamCheckConfig {
 	acceptable_missing_percentage: number;
 	cache_ttl_minutes: number;
 	max_batch: number;
+	stream_blocklist: StreamCheckStreamBlocklistConfig;
+}
+
+export interface StreamCheckStreamBlocklistConfig {
+	enabled: boolean;
+	db_path?: string;
+	quorum: number;
+	max_source_entries: number;
+	backbone_scope: boolean;
+	mark_dead: boolean;
 }
 
 // Helper type for configuration sections
@@ -817,7 +827,7 @@ export const CONFIG_SECTIONS: Record<ConfigSection | "system", ConfigSectionInfo
 	stremio: {
 		title: "Stremio Integration",
 		description:
-			"Upload an NZB for instant stream URLs, or enable the addon to automatically search Prowlarr by IMDB ID and stream results directly from Stremio.",
+			"Stremio addon, Prowlarr search, stream checks, and stream blocklist source management.",
 		icon: "Tv",
 		canEdit: true,
 	},
@@ -827,6 +837,7 @@ export const CONFIG_SECTIONS: Record<ConfigSection | "system", ConfigSectionInfo
 			"On-demand Usenet availability check. Verifies an NZB's segments via NNTP STAT without importing, so clients like AIOStreams can filter out dead or incomplete releases before showing them.",
 		icon: "Activity",
 		canEdit: true,
+		hidden: true,
 	},
 	nzblnk: {
 		title: "NZBLNK",

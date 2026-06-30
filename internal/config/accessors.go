@@ -134,6 +134,35 @@ func (c *Config) GetStreamCheckMaxBatch() int {
 	return c.StreamCheck.MaxBatch
 }
 
+func (c *Config) GetStreamCheckStreamBlocklistEnabled() bool {
+	return true
+}
+
+func (c *Config) GetStreamCheckStreamBlocklistDBPath() string {
+	return c.StreamCheck.StreamBlocklist.DBPath
+}
+
+const (
+	StreamCheckStreamBlocklistDefaultQuorum           = 2
+	StreamCheckStreamBlocklistDefaultMaxSourceEntries = 2_000_000
+)
+
+func (c *Config) GetStreamCheckStreamBlocklistQuorum() int {
+	return StreamCheckStreamBlocklistDefaultQuorum
+}
+
+func (c *Config) GetStreamCheckStreamBlocklistMaxSourceEntries() int {
+	return StreamCheckStreamBlocklistDefaultMaxSourceEntries
+}
+
+func (c *Config) GetStreamCheckStreamBlocklistBackboneScopeEnabled() bool {
+	return true
+}
+
+func (c *Config) GetStreamCheckStreamBlocklistMarkDead() bool {
+	return true
+}
+
 // GetMaxRetries returns the maximum number of health check retries.
 func (c *Config) GetMaxRetries() int {
 	if c.Health.MaxRetries <= 0 {

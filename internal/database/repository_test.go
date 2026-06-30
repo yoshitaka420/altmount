@@ -217,3 +217,40 @@ func TestClaimNextQueueItem_PriorityOrdering(t *testing.T) {
 	require.NotNil(t, item3)
 	assert.Equal(t, int64(1), item3.ID, "Should claim low priority item last")
 }
+
+func TestQueueSourceFilterSplitsRegularAndStremioItems(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	setupQueueSchema(t, db)
+	_, err = db.Exec(`
+		INSERT INTO import_queue (id, download_id, nzb_path, status, priority, metadata) VALUES
+			(1, NULL, 'regular.nzb', 'pending', 1, NULL),
+			(2, 'stremio:download', 'stremio-download-id.nzb', 'pending', 1, NULL),
+			(3, NULL, 'stremio-metadata.nzb', 'failed', 1, '{"source":"stremio","stream_blocklist_blocked":true}')
+	`)
+	require.NoError(t, err)
+
+	repo := NewRepository(db, DialectSQLite)
+	ctx := context.Background()
+
+	regular, err := repo.ListQueueItems(ctx, nil, "", "", "regular", 20, 0, "nzb_path", "asc")
+	require.NoError(t, err)
+	require.Len(t, regular, 1)
+	assert.Equal(t, "regular.nzb", regular[0].NzbPath)
+
+	stremio, err := repo.ListQueueItems(ctx, nil, "", "", "stremio", 20, 0, "nzb_path", "asc")
+	require.NoError(t, err)
+	require.Len(t, stremio, 2)
+	assert.Equal(t, "stremio-download-id.nzb", stremio[0].NzbPath)
+	assert.Equal(t, "stremio-metadata.nzb", stremio[1].NzbPath)
+
+	regularCount, err := repo.CountQueueItems(ctx, nil, "", "", "regular")
+	require.NoError(t, err)
+	assert.Equal(t, 1, regularCount)
+
+	stremioCount, err := repo.CountQueueItems(ctx, nil, "", "", "stremio")
+	require.NoError(t, err)
+	assert.Equal(t, 2, stremioCount)
+}

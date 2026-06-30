@@ -246,6 +246,12 @@ func (s *Server) handleStremioAddonStream(c *fiber.Ctx) error {
 			"?url=" + url.QueryEscape(r.DownloadURL) +
 			"&title=" + url.QueryEscape(safeTitle) +
 			"&type=" + url.QueryEscape(streamType)
+		if r.Size > 0 {
+			playURL += "&size=" + url.QueryEscape(strconv.FormatInt(r.Size, 10))
+		}
+		if !r.PublishDate.IsZero() {
+			playURL += "&usenet_date=" + url.QueryEscape(strconv.FormatInt(r.PublishDate.Unix(), 10))
+		}
 		// Relay the Prowlarr indexer so the eventual import is attributed to it in
 		// indexer health rather than logged as "Unknown".
 		if r.Indexer != "" {
@@ -349,6 +355,7 @@ func (s *Server) handleStremioAddonPlay(c *fiber.Ctx) error {
 	if safeTitle == "" {
 		safeTitle = "unknown"
 	}
+	blocklistIdentity := streamcheckIdentityFromRequest(c)
 	// Optional source indexer relayed from the stream list, attributed at import time.
 	var indexerPtr *string
 	if indexer := c.Query("indexer"); indexer != "" {
@@ -364,7 +371,7 @@ func (s *Server) handleStremioAddonPlay(c *fiber.Ctx) error {
 	// Short-circuit: return cached stream if already processed within TTL
 	ttlHours := cfg.Stremio.NzbTTLHours
 	completedStatus := database.QueueStatusCompleted
-	if existing, err := s.queueRepo.ListQueueItems(ctx, &completedStatus, safeFilename, "", 1, 0, "updated_at", "desc"); err == nil && len(existing) > 0 {
+	if existing, err := s.queueRepo.ListQueueItems(ctx, &completedStatus, safeFilename, "", "", 1, 0, "updated_at", "desc"); err == nil && len(existing) > 0 {
 		prev := existing[0]
 		cacheValid := prev.StoragePath != nil && *prev.StoragePath != ""
 		if cacheValid && ttlHours > 0 && prev.CompletedAt != nil {
@@ -382,7 +389,7 @@ func (s *Server) handleStremioAddonPlay(c *fiber.Ctx) error {
 	// Coalesce concurrent plays of the same title so the release is downloaded/queued once.
 	v, err, _ := s.stremioPlayGroup.Do(safeFilename, func() (interface{}, error) {
 		// Serialized per title: reuse an in-flight or TTL-fresh import instead of re-downloading.
-		if items, e := s.queueRepo.ListQueueItems(ctx, nil, safeFilename, "", 1, 0, "updated_at", "desc"); e == nil && len(items) > 0 {
+		if items, e := s.queueRepo.ListQueueItems(ctx, nil, safeFilename, "", "", 1, 0, "updated_at", "desc"); e == nil && len(items) > 0 {
 			it := items[0]
 			switch it.Status {
 			case database.QueueStatusPending, database.QueueStatusProcessing, database.QueueStatusPaused:
@@ -415,7 +422,12 @@ func (s *Server) handleStremioAddonPlay(c *fiber.Ctx) error {
 			return nil, fmt.Errorf("failed to create staging directory: %w", err)
 		}
 		// Importer moves the NZB out on success; this clears the staged file / empty dir.
-		defer os.RemoveAll(stageDir)
+		cleanupStage := true
+		defer func() {
+			if cleanupStage {
+				os.RemoveAll(stageDir)
+			}
+		}()
 		tempPath := filepath.Join(stageDir, safeFilename)
 
 		// Download NZB from Prowlarr
@@ -445,8 +457,18 @@ func (s *Server) handleStremioAddonPlay(c *fiber.Ctx) error {
 		if c.Query("type") == "series" {
 			category = "TV"
 		}
+		if cfg.GetStreamCheckStreamBlocklistEnabled() && s.isStremioStreamBlocklisted(workCtx, nzbData, blocklistIdentity) {
+			item, err := s.addFailedStremioStreamBlocklistQueueItem(workCtx, tempPath, &category, priority, blocklistIdentity)
+			if err != nil {
+				return nil, fmt.Errorf("failed to add stream-blocklisted NZB to queue: %w", err)
+			}
+			cleanupStage = false
+			slog.InfoContext(workCtx, "Prowlarr NZB blocked by stream blocklist during Stremio queue admission",
+				"queue_id", item.ID, "title", safeTitle)
+			return item.ID, nil
+		}
 		stremioDownloadID := stremioDownloadIDPrefix + uuid.NewString()
-		item, err := s.importerService.AddToQueue(workCtx, tempPath, basePath, &category, &priority, nil, &stremioDownloadID, indexerPtr)
+		item, err := s.importerService.AddToQueue(workCtx, tempPath, basePath, &category, &priority, stremioQueueMetadataForIdentity(blocklistIdentity), &stremioDownloadID, indexerPtr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to add NZB to queue: %w", err)
 		}
@@ -492,7 +514,11 @@ func (s *Server) waitAndRedirectToStream(c *fiber.Ctx, itemID int64, baseURL, do
 	case database.QueueStatusCompleted:
 		return redirectToFirst(current)
 	case database.QueueStatusFailed:
-		return RespondServiceUnavailable(c, "NZB processing failed", "")
+		errMsg := "NZB processing failed"
+		if current.ErrorMessage != nil && *current.ErrorMessage != "" {
+			errMsg = *current.ErrorMessage
+		}
+		return RespondServiceUnavailable(c, errMsg, "")
 	default:
 		// If the item is already processing and has a storage path, the streamable
 		// event fired before we subscribed — redirect immediately.
@@ -532,7 +558,12 @@ func (s *Server) waitAndRedirectToStream(c *fiber.Ctx, itemID int64, baseURL, do
 				}
 				return redirectToFirst(item)
 			case "failed":
-				return RespondServiceUnavailable(c, "NZB processing failed", "")
+				item, _ := s.queueRepo.GetQueueItem(ctx, itemID)
+				errMsg := "NZB processing failed"
+				if item != nil && item.ErrorMessage != nil && *item.ErrorMessage != "" {
+					errMsg = *item.ErrorMessage
+				}
+				return RespondServiceUnavailable(c, errMsg, "")
 			}
 		case <-timer.C:
 			return RespondServiceUnavailable(c, "Processing timed out",

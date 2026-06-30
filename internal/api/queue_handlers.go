@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"io"
@@ -91,6 +92,12 @@ func (s *Server) handleListQueue(c *fiber.Ctx) error {
 
 	// Parse search parameter
 	searchFilter := c.Query("search")
+	sourceFilter := c.Query("source")
+	switch sourceFilter {
+	case "", "regular", "stremio":
+	default:
+		return RespondValidationError(c, "Invalid source filter", "Valid values: regular, stremio")
+	}
 
 	// Parse sort parameters
 	sortBy := c.Query("sort_by", "updated_at")
@@ -121,13 +128,13 @@ func (s *Server) handleListQueue(c *fiber.Ctx) error {
 	}
 
 	// Get total count for pagination
-	totalCount, err := s.queueRepo.CountQueueItems(c.Context(), statusFilter, searchFilter, "")
+	totalCount, err := s.queueRepo.CountQueueItems(c.Context(), statusFilter, searchFilter, "", sourceFilter)
 	if err != nil {
 		return RespondInternalError(c, "Failed to count queue items", err.Error())
 	}
 
 	// Get queue items from repository
-	items, err := s.queueRepo.ListQueueItems(c.Context(), statusFilter, searchFilter, "", pagination.Limit, pagination.Offset, sortBy, sortOrder)
+	items, err := s.queueRepo.ListQueueItems(c.Context(), statusFilter, searchFilter, "", sourceFilter, pagination.Limit, pagination.Offset, sortBy, sortOrder)
 	if err != nil {
 		return RespondInternalError(c, "Failed to retrieve queue items", err.Error())
 	}
@@ -384,6 +391,21 @@ func (s *Server) handleCancelQueue(c *fiber.Ctx) error {
 //	@Security		BearerAuth
 //	@Router			/queue/stats [get]
 func (s *Server) handleGetQueueStats(c *fiber.Ctx) error {
+	sourceFilter := c.Query("source")
+	switch sourceFilter {
+	case "":
+	case "regular", "stremio":
+		stats, err := s.queueStatsForSource(c.Context(), sourceFilter)
+		if err != nil {
+			return RespondInternalError(c, "Failed to retrieve queue statistics", err.Error())
+		}
+
+		response := ToQueueStatsResponse(stats)
+		return RespondSuccess(c, response)
+	default:
+		return RespondValidationError(c, "Invalid source filter", "Valid values: regular, stremio")
+	}
+
 	stats, err := s.queueRepo.GetQueueStats(c.Context())
 	if err != nil {
 		return RespondInternalError(c, "Failed to retrieve queue statistics", err.Error())
@@ -391,6 +413,38 @@ func (s *Server) handleGetQueueStats(c *fiber.Ctx) error {
 
 	response := ToQueueStatsResponse(stats)
 	return RespondSuccess(c, response)
+}
+
+func (s *Server) queueStatsForSource(ctx context.Context, source string) (*database.QueueStats, error) {
+	pending := database.QueueStatusPending
+	processing := database.QueueStatusProcessing
+	completed := database.QueueStatusCompleted
+	failed := database.QueueStatusFailed
+
+	pendingCount, err := s.queueRepo.CountQueueItems(ctx, &pending, "", "", source)
+	if err != nil {
+		return nil, err
+	}
+	processingCount, err := s.queueRepo.CountQueueItems(ctx, &processing, "", "", source)
+	if err != nil {
+		return nil, err
+	}
+	completedCount, err := s.queueRepo.CountQueueItems(ctx, &completed, "", "", source)
+	if err != nil {
+		return nil, err
+	}
+	failedCount, err := s.queueRepo.CountQueueItems(ctx, &failed, "", "", source)
+	if err != nil {
+		return nil, err
+	}
+
+	return &database.QueueStats{
+		TotalQueued:     pendingCount,
+		TotalProcessing: processingCount,
+		TotalCompleted:  completedCount,
+		TotalFailed:     failedCount,
+		LastUpdated:     time.Now(),
+	}, nil
 }
 
 // handleGetQueueHistoricalStats handles GET /api/queue/stats/history

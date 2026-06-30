@@ -27,7 +27,6 @@ import { MountConfigSection } from "../components/config/MountConfigSection";
 import { NetworkConfigSection } from "../components/config/NetworkConfigSection";
 import { ProvidersConfigSection } from "../components/config/ProvidersConfigSection";
 import { SABnzbdConfigSection } from "../components/config/SABnzbdConfigSection";
-import { StreamCheckConfigSection } from "../components/config/StreamCheckConfigSection";
 import { StreamingConfigSection } from "../components/config/StreamingConfigSection";
 import { StremioConfigSection } from "../components/config/StremioConfigSection";
 import { SystemConfigSection } from "../components/config/SystemConfigSection";
@@ -98,7 +97,7 @@ const SECTION_GROUPS = [
 	},
 	{
 		title: "Automation",
-		sections: ["sabnzbd", "arrs", "health", "stremio", "stream_check", "import"],
+		sections: ["sabnzbd", "arrs", "health", "stremio", "import"],
 	},
 	{
 		title: "System",
@@ -125,6 +124,7 @@ export function ConfigurationPage() {
 		if (section === "rclone" || section === "fuse") return "mount" as ConfigSection;
 		// NZBLNK settings now live inside the Network section
 		if (section === "nzblnk") return "network" as ConfigSection;
+		if (section === "stream_check") return "stremio" as ConfigSection;
 		const validSections = Object.keys(CONFIG_SECTIONS) as (ConfigSection | "system")[];
 		return validSections.includes(section as ConfigSection | "system")
 			? (section as ConfigSection | "system")
@@ -139,6 +139,8 @@ export function ConfigurationPage() {
 			navigate("/config/mount", { replace: true });
 		} else if (section === "nzblnk") {
 			navigate("/config/network", { replace: true });
+		} else if (section === "stream_check") {
+			navigate("/config/stremio", { replace: true });
 		}
 	}, [section, navigate]);
 
@@ -571,13 +573,6 @@ export function ConfigurationPage() {
 										isUpdating={updateConfigSection.isPending}
 									/>
 								)}
-								{activeSection === "stream_check" && (
-									<StreamCheckConfigSection
-										config={config}
-										onUpdate={handleConfigUpdate}
-										isUpdating={updateConfigSection.isPending}
-									/>
-								)}
 								{activeSection === "network" && (
 									<NetworkConfigSection
 										config={config}
@@ -598,7 +593,6 @@ export function ConfigurationPage() {
 									"arrs",
 									"health",
 									"stremio",
-									"stream_check",
 									"network",
 								].includes(activeSection) && (
 									<ComingSoonSection

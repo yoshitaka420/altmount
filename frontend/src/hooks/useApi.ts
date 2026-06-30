@@ -11,6 +11,7 @@ export const useQueue = (params?: {
 	search?: string;
 	sort_by?: string;
 	sort_order?: "asc" | "desc";
+	source?: "regular" | "stremio";
 	refetchInterval?: number;
 }) => {
 	return useQuery({
@@ -20,10 +21,10 @@ export const useQueue = (params?: {
 	});
 };
 
-export const useQueueStats = (refetchInterval?: number) => {
+export const useQueueStats = (refetchInterval?: number, source?: "regular" | "stremio") => {
 	return useQuery({
-		queryKey: ["queue", "stats"],
-		queryFn: () => apiClient.getQueueStats(),
+		queryKey: ["queue", "stats", source],
+		queryFn: () => apiClient.getQueueStats(source),
 		refetchInterval,
 	});
 };

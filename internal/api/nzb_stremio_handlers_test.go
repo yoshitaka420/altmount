@@ -1,12 +1,15 @@
 package api
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/gofiber/fiber/v2"
 	"github.com/javi11/altmount/internal/database"
 	"github.com/javi11/altmount/internal/metadata"
 	"github.com/stretchr/testify/require"
@@ -89,6 +92,40 @@ func TestStremioEpisodeSelectorMatchesCommonEpisodeFilenameForms(t *testing.T) {
 	require.True(t, selector.matches("Show.S01E01E02.mkv"))
 	require.False(t, selector.matches("Show.S01E01.mkv"))
 	require.False(t, selector.matches("Show.S02E02.mkv"))
+}
+
+func TestStreamcheckIdentityFromRequestUsesFormValuesBeforeQuery(t *testing.T) {
+	app := fiber.New()
+	app.Post("/", func(c *fiber.Ctx) error {
+		identity := streamcheckIdentityFromRequest(c)
+		require.Equal(t, int64(12345), identity.Size)
+		require.Equal(t, "Poster@Example.COM", identity.Poster)
+		require.Equal(t, int64(45678), identity.UsenetDate)
+		return c.SendStatus(fiber.StatusOK)
+	})
+
+	body := strings.NewReader("size=12345&poster=Poster%40Example.COM&date=45678")
+	req := httptest.NewRequest(http.MethodPost, "/?size=1&poster=query&usenet_date=2", body)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := app.Test(req)
+	require.NoError(t, err)
+	require.Equal(t, fiber.StatusOK, resp.StatusCode)
+}
+
+func TestStreamcheckIdentityFromRequestUsesQueryUsenetDate(t *testing.T) {
+	app := fiber.New()
+	app.Get("/", func(c *fiber.Ctx) error {
+		identity := streamcheckIdentityFromRequest(c)
+		require.Equal(t, int64(98765), identity.Size)
+		require.Equal(t, "poster", identity.Poster)
+		require.Equal(t, int64(123456), identity.UsenetDate)
+		return c.SendStatus(fiber.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/?size=98765&poster=poster&usenet_date=123456", nil)
+	resp, err := app.Test(req)
+	require.NoError(t, err)
+	require.Equal(t, fiber.StatusOK, resp.StatusCode)
 }
 
 func newStremioStreamsTestServer(t *testing.T, names []string) (*Server, *database.ImportQueueItem) {
